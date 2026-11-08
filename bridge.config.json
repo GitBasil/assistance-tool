@@ -3,7 +3,8 @@
   "retentionDays": 30,
   "sites": {
     "local-dev-site-key": {
-      "name": "Local development"
+      "name": "Local development",
+      "config": {}
     }
   }
 }
