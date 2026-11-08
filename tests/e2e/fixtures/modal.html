@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Modals and z-index stress</title>
+    <style>
+      /* Hostile stacking: a max-z fixed header, a transformed container and an isolated layer. */
+      .bar { position: fixed; inset: 0 0 auto 0; height: 64px; background: #123; color: #fff; z-index: 2147483647; }
+      .stage { margin-top: 90px; transform: translateZ(0); isolation: isolate; position: relative; z-index: 99999; }
+      .trap { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 2147483647; display: none; align-items: center; justify-content: center; }
+      .trap.open { display: flex; }
+      .trap > div { background: #fff; padding: 24px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="bar"><button id="bar-btn" type="button">Account</button></div>
+    <div class="stage">
+      <button id="open-trap" type="button">Open trapped modal</button>
+      <button id="open-dialog" type="button">Open native dialog</button>
+    </div>
+    <div class="trap" id="trap" role="dialog" aria-modal="true">
+      <div>
+        <label for="t-name">Name</label>
+        <input id="t-name" />
+        <button id="t-close" type="button">Close</button>
+      </div>
+    </div>
+    <dialog id="dlg">
+      <label for="d-name">Nickname</label>
+      <input id="d-name" />
+      <button id="d-close" type="button">Close</button>
+    </dialog>
+    <script>
+      // Hand-rolled focus trap, same strategy as focus-trap / MUI / Bootstrap:
+      // any focus outside the modal is pulled back in.
+      const trap = document.getElementById('trap');
+      window.trapSteals = 0;
+      document.addEventListener(
+        'focusin',
+        (e) => {
+          if (trap.classList.contains('open') && !trap.contains(e.target)) {
+            window.trapSteals++;
+            document.getElementById('t-name').focus();
+          }
+        },
+        true,
+      );
+      document.getElementById('open-trap').onclick = () => {
+        trap.classList.add('open');
+        document.getElementById('t-name').focus();
+      };
+      document.getElementById('t-close').onclick = () => trap.classList.remove('open');
+      document.getElementById('open-dialog').onclick = () => document.getElementById('dlg').showModal();
+      document.getElementById('d-close').onclick = () => document.getElementById('dlg').close();
+    </script>
+    <script async src="/assist/assist.js" data-key="test"></script>
+  </body>
+</html>

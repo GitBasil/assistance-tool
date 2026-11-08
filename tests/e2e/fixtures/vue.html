@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vue app</title>
+    <script src="/vendor/vue.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <h1>Vue app</h1>
+      <label for="name">Full name</label>
+      <input id="name" v-model="name" />
+      <p id="out">Hello {{ name }}</p>
+      <label for="plan">Plan</label>
+      <select id="plan" v-model="plan">
+        <option value="basic">Basic</option>
+        <option value="pro">Pro</option>
+      </select>
+      <p id="plan-out">Plan {{ plan }}</p>
+      <ul>
+        <li v-for="i in items" :key="i">{{ i }}</li>
+      </ul>
+      <button id="add" @click="items.push('Item ' + (items.length + 1))">Add item</button>
+    </div>
+    <script>
+      Vue.createApp({ data: () => ({ name: '', plan: 'basic', items: ['Item 1'] }) }).mount('#app');
+    </script>
+    <script async src="/assist/assist.js" data-key="test"></script>
+  </body>
+</html>

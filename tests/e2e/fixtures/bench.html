@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Bench: catalog + checkout</title>
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; margin: 0; }
+      header { position: sticky; top: 0; background: #0b3d91; color: #fff; padding: 12px 24px; display: flex; gap: 16px; }
+      header a { color: #fff; }
+      .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 24px; }
+      .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+      form { padding: 24px; display: grid; gap: 8px; max-width: 420px; }
+    </style>
+  </head>
+  <body>
+    <header><a href="#">Home</a><a href="#">Products</a><a href="#">Support</a><a href="#">Account</a></header>
+    <form id="checkout" onsubmit="return false">
+      <label for="name">Full name</label><input id="name" required />
+      <label for="email">Email</label><input id="email" type="email" required />
+      <label for="zip">ZIP code</label><input id="zip" pattern="\d{5}" required />
+      <label for="phone">Phone</label><input id="phone" type="tel" />
+      <label for="plan">Plan</label><select id="plan"><option>Basic</option><option>Pro</option></select>
+      <button id="buy" type="submit">Continue</button>
+    </form>
+    <main class="grid" id="grid"></main>
+    <script>
+      // ~2,500 elements: a realistic mid-size page for the host-side work.
+      const g = document.getElementById('grid');
+      for (let i = 1; i <= 240; i++) {
+        const c = document.createElement('article');
+        c.className = 'card';
+        c.innerHTML = `<h3>Product ${i}</h3><p>Sturdy, reliable and well reviewed. Ships in ${(i % 5) + 1} days.</p><p><strong>$${(i * 7.3).toFixed(2)}</strong></p><button type="button" class="add">Add to cart</button> <a href="#p${i}">Details</a>`;
+        g.appendChild(c);
+      }
+      let cart = 0;
+      g.addEventListener('click', (e) => e.target.matches('.add') && (e.target.textContent = 'Added (' + ++cart + ')'));
+    </script>
+    <script async src="/assist/assist.js" data-key="test"></script>
+  </body>
+</html>

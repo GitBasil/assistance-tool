@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lakeshore Lending — Home</title>
+    <link rel="stylesheet" href="/site.css" />
+    <!-- Assist stub + loader: calls made before the script loads are queued -->
+    <script>
+      window.Assist = window.Assist || { q: [] };
+      ['init', 'track', 'identify', 'consent', 'on', 'ask', 'tour', 'action', 'highlight', 'tip', 'mute'].forEach(function (m) {
+        Assist[m] = Assist[m] || function () { Assist.q.push([m, [].slice.call(arguments)]); };
+      });
+      Assist.init({
+        instructions: 'Lakeshore Lending is a mortgage lender. Be warm and concise. Never give financial advice; point people to a loan officer for rate questions.',
+        funnels: [{ name: 'Apply', steps: ['/', '/loan.html', '#submit-application'] }],
+        tutorials: [
+          {
+            id: 'apply-basics',
+            title: 'How to apply',
+            trigger: 'firstVisit',
+            route: '/',
+            steps: [
+              { target: '#start-app', text: 'Start a new mortgage application here.' },
+              { target: '#search-link', text: 'Not sure which loan fits? **Search our products** first.' },
+              { target: '#settings-link', text: 'Manage notifications and your profile in **Settings**.' },
+            ],
+          },
+        ],
+      });
+    </script>
+    <script async src="http://localhost:7821/assist.js" data-key="local-dev-site-key"></script>
+  </head>
+  <body>
+    <header class="top">
+      <span class="logo">Lakeshore Lending</span>
+      <a href="/">Home</a>
+      <a id="search-link" href="/search.html">Products</a>
+      <a id="settings-link" href="/settings.html">Settings</a>
+    </header>
+    <div class="wrap">
+      <div class="panel">
+        <h1>Welcome back</h1>
+        <p class="lead">Buy a home, refinance, or check on an application.</p>
+        <a id="start-app" class="btn" href="/loan.html">Start an application</a>
+      </div>
+      <div class="grid">
+        <div class="tile"><h3>Loan application</h3><p>Hidden date format rule + a submit button that looks disabled.</p><a href="/loan.html">Open</a></div>
+        <div class="tile"><h3>Product search</h3><p>Dead-end search, a fake link and a filter button that does nothing.</p><a href="/search.html">Open</a></div>
+        <div class="tile"><h3>Settings</h3><p>Save fails with a server error; "Export" is a dead button.</p><a href="/settings.html">Open</a></div>
+      </div>
+    </div>
+  </body>
+</html>

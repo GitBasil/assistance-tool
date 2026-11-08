@@ -1,0 +1,18 @@
+services:
+  footsteps:
+    build: .
+    image: footsteps:latest
+    restart: unless-stopped
+    ports:
+      - "7821:7821"
+    environment:
+      # The address people and scripts use to reach this server. The embed snippet is built from it.
+      ASSIST_PUBLIC_URL: ${ASSIST_PUBLIC_URL:-http://localhost:7821}
+      ASSIST_RETENTION_DAYS: ${ASSIST_RETENTION_DAYS:-30}
+      # Behind a reverse proxy (nginx, Traefik, a load balancer): trust its X-Forwarded-* headers.
+      ASSIST_TRUST_PROXY: ${ASSIST_TRUST_PROXY:-false}
+      ASSIST_LOG_LEVEL: ${ASSIST_LOG_LEVEL:-info}
+    volumes:
+      # The same data directory the npm server used, so existing sites and events stay.
+      - ./data:/data
+    stop_grace_period: 10s

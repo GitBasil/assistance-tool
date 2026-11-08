@@ -1,0 +1,8 @@
+node_modules/
+dist/
+build/
+data/
+.cache/
+test-results/
+playwright-report/
+bridge.config.local.json

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Web components</title>
+  </head>
+  <body>
+    <h1>Design-system components</h1>
+    <ds-search id="search"></ds-search>
+    <ds-closed id="closed"></ds-closed>
+    <script>
+      customElements.define(
+        'ds-search',
+        class extends HTMLElement {
+          connectedCallback() {
+            const r = this.attachShadow({ mode: 'open' });
+            r.innerHTML = '<label for="q">Search products</label><input id="q" required minlength="3"><button id="go" type="button">Go</button>';
+          }
+        },
+      );
+      customElements.define(
+        'ds-closed',
+        class extends HTMLElement {
+          connectedCallback() {
+            this.attachShadow({ mode: 'closed' }).innerHTML = '<button>Closed action</button>';
+          }
+        },
+      );
+    </script>
+    <script async src="/assist/assist.js" data-key="test"></script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "port": 7821,
+  "retentionDays": 30,
+  "sites": {
+    "local-dev-site-key": {
+      "name": "Local development",
+      "config": {}
+    }
+  }
+}

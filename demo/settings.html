@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lakeshore Lending — Settings</title>
+    <link rel="stylesheet" href="/site.css" />
+    <script>
+      window.Assist = window.Assist || { q: [] };
+      ['init', 'track', 'identify', 'consent', 'on', 'ask', 'tour', 'action', 'highlight', 'tip', 'mute'].forEach(function (m) {
+        Assist[m] = Assist[m] || function () { Assist.q.push([m, [].slice.call(arguments)]); };
+      });
+      Assist.track('settings_opened');
+    </script>
+    <script async src="http://localhost:7821/assist.js" data-key="local-dev-site-key"></script>
+  </head>
+  <body>
+    <header class="top">
+      <span class="logo">Lakeshore Lending</span>
+      <a href="/">Home</a>
+      <a href="/search.html">Products</a>
+      <a href="/settings.html">Settings</a>
+    </header>
+    <div class="wrap">
+      <form class="panel" id="settings">
+        <h1>Settings</h1>
+        <p class="lead">Notifications and profile.</p>
+        <label for="display">Display name</label>
+        <input id="display" name="display" value="Jordan" />
+        <label for="cpw">New password</label>
+        <input id="cpw" name="cpw" type="password" autocomplete="new-password" />
+        <label class="switch"><input type="checkbox" id="emails" checked /> Email me about my application</label>
+        <label class="switch"><input type="checkbox" id="sms" /> Text me about my application</label>
+        <div class="row">
+          <!-- Planted problem: save always fails with HTTP 500 -->
+          <button class="btn" type="submit" id="save">Save changes</button>
+          <!-- Planted problem: dead button -->
+          <button class="btn secondary" type="button" id="export">Export my data</button>
+        </div>
+      </form>
+    </div>
+    <script>
+      document.querySelector('#settings').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const r = await fetch('/api/fail', { method: 'POST' });
+        if (!r.ok) {
+          const t = document.createElement('div');
+          t.className = 'toast';
+          t.setAttribute('role', 'alert');
+          t.textContent = 'Something went wrong. Please try again.';
+          document.body.append(t);
+          setTimeout(() => t.remove(), 4000);
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Plain HTML</title>
+  </head>
+  <body>
+    <main>
+      <h1>Contact us</h1>
+      <form id="f" onsubmit="return false">
+        <label for="email">Email</label>
+        <input id="email" type="email" required />
+        <label for="zip">ZIP code</label>
+        <input id="zip" pattern="\d{5}" required />
+        <button id="send" type="submit">Send</button>
+      </form>
+      <button id="export" type="button">Export</button>
+      <button id="boom" type="button" onclick="fetch('/api/fail').then((r) => r.json()); setTimeout(() => { throw new Error('plain page failure') })">Break</button>
+    </main>
+    <script async src="/assist/assist.js" data-key="test"></script>
+  </body>
+</html>

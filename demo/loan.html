@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lakeshore Lending — Application</title>
+    <link rel="stylesheet" href="/site.css" />
+    <style>
+      /* Planted problem: the submit button LOOKS disabled but works. */
+      #submit-application { background: #cbd2d9; color: #7b8794; }
+    </style>
+    <script>
+      window.Assist = window.Assist || { q: [] };
+      ['init', 'track', 'identify', 'consent', 'on', 'ask', 'tour', 'action', 'highlight', 'tip', 'mute'].forEach(function (m) {
+        Assist[m] = Assist[m] || function () { Assist.q.push([m, [].slice.call(arguments)]); };
+      });
+      Assist.init({
+        funnels: [{ name: 'Apply', steps: ['/', '/loan.html', '#submit-application'] }],
+        tips: [{ selector: '#income', title: 'Annual income', text: 'Use your **gross** yearly income before taxes.', on: 'focus' }],
+      });
+    </script>
+    <script async src="http://localhost:7821/assist.js" data-key="local-dev-site-key"></script>
+  </head>
+  <body>
+    <header class="top">
+      <span class="logo">Lakeshore Lending</span>
+      <a href="/">Home</a>
+      <a href="/search.html">Products</a>
+      <a href="/settings.html">Settings</a>
+    </header>
+    <div class="wrap">
+      <form class="panel" id="app-form" novalidate>
+        <div class="steps"><span class="on" id="s1">1. About you</span><span id="s2">2. The loan</span></div>
+        <h1>Mortgage application</h1>
+        <p class="lead">It takes about 5 minutes.</p>
+
+        <fieldset id="step1" style="border:0;padding:0;margin:0">
+          <label for="name">Full name</label>
+          <input id="name" name="name" autocomplete="name" required />
+
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="email" required />
+
+          <!-- Planted problem: the format rule (MM/DD/YYYY) is never shown to the user -->
+          <label for="dob">Date of birth</label>
+          <input id="dob" name="dob" required pattern="\d{2}/\d{2}/\d{4}" />
+          <div class="error" id="dob-error" hidden>Invalid input</div>
+
+          <label for="phone">Phone</label>
+          <input id="phone" name="phone" type="tel" autocomplete="tel" />
+
+          <div class="row"><button type="button" class="btn" id="next">Continue</button></div>
+        </fieldset>
+
+        <fieldset id="step2" hidden style="border:0;padding:0;margin:0">
+          <label for="purpose">Loan purpose</label>
+          <select id="purpose" name="purpose" required>
+            <option value="">Choose…</option>
+            <option>Purchase</option>
+            <option>Refinance</option>
+            <option>Cash-out refinance</option>
+          </select>
+
+          <label for="amount">Loan amount (USD)</label>
+          <input id="amount" name="amount" inputmode="numeric" required pattern="\d{4,7}" placeholder="e.g. 320000" />
+
+          <label for="income">Annual income (USD)</label>
+          <input id="income" name="income" inputmode="numeric" required />
+
+          <label for="zip">Property ZIP code</label>
+          <input id="zip" name="zip" required pattern="\d{5}" autocomplete="postal-code" />
+
+          <div class="row">
+            <button type="button" class="btn secondary" id="back">Back</button>
+            <button type="submit" class="btn" id="submit-application">Submit application</button>
+          </div>
+        </fieldset>
+      </form>
+      <div class="panel" id="done" hidden><h1>Application received 🎉</h1><p class="lead">A loan officer will contact you within one business day.</p></div>
+    </div>
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const dob = $('#dob');
+      $('#next').addEventListener('click', () => {
+        const bad = !dob.checkValidity();
+        $('#dob-error').hidden = !bad;
+        dob.setAttribute('aria-invalid', bad ? 'true' : 'false');
+        if (bad || !$('#name').value || !$('#email').value) return;
+        $('#step1').hidden = true;
+        $('#step2').hidden = false;
+        $('#s1').className = '';
+        $('#s2').className = 'on';
+        history.pushState({}, '', '/loan.html#step-2');
+      });
+      $('#back').addEventListener('click', () => {
+        $('#step1').hidden = false;
+        $('#step2').hidden = true;
+        $('#s1').className = 'on';
+        $('#s2').className = '';
+      });
+      $('#app-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!e.target.checkValidity()) return e.target.reportValidity();
+        await fetch('/api/apply', { method: 'POST' });
+        $('#app-form').hidden = true;
+        $('#done').hidden = false;
+      });
+    </script>
+  </body>
+</html>

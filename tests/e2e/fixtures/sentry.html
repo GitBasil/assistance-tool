@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>App with Sentry</title>
+    <script src="/vendor/sentry.js"></script>
+    <script>
+      window.sentryEvents = [];
+      Sentry.init({
+        dsn: 'https://public@o0.ingest.example.invalid/1',
+        defaultIntegrations: undefined,
+        beforeSend(event) {
+          window.sentryEvents.push(event);
+          return null;
+        },
+      });
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Orders</h1>
+      <button id="throw" type="button" onclick="setTimeout(() => { throw new Error('order total is NaN') })">Recalculate</button>
+      <button id="reject" type="button" onclick="Promise.reject(new Error('sync rejected'))">Sync</button>
+      <button id="fail" type="button" onclick="fetch('/api/fail')">Save</button>
+    </main>
+    <script async src="/assist/assist.js" data-key="test" data-network="wrap"></script>
+  </body>
+</html>

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>zone.js app</title>
+    <script src="/vendor/zone.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Angular-style app (zone.js)</h1>
+      <button id="load" type="button">Load data</button>
+      <p id="status">idle</p>
+    </main>
+    <script>
+      // Mimic Angular: the app runs inside a forked zone and counts the tasks it sees.
+      window.zoneTasks = 0;
+      const app = Zone.current.fork({
+        name: 'app',
+        onInvokeTask(parent, cur, target, task, ...rest) {
+          window.zoneTasks++;
+          return parent.invokeTask(target, task, ...rest);
+        },
+      });
+      app.run(() => {
+        document.getElementById('load').addEventListener('click', async () => {
+          const r = await fetch('/api/ok');
+          document.getElementById('status').textContent = r.ok ? 'loaded' : 'failed';
+        });
+      });
+    </script>
+    <script async src="/assist/assist.js" data-key="test" data-network="wrap"></script>
+  </body>
+</html>

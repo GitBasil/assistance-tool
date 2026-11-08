@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Footsteps</title>
+    <link rel="icon" href="/dashboard/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/dashboard/styles.css" />
+    <script type="module" src="/dashboard/app.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <aside class="side">
+      <div class="brand"><img src="/dashboard/favicon.svg" alt="" width="22" height="22" />Footsteps <span>insights</span></div>
+      <div id="switcher" class="switcher"></div>
+      <nav id="nav" aria-label="Views"></nav>
+      <div class="side-foot">
+        <div id="live" class="live-status" role="status" aria-live="polite"><i></i><span>Connecting…</span></div>
+        <div id="ver" class="ver"></div>
+      </div>
+    </aside>
+    <main id="main" tabindex="-1"><div class="skeleton" aria-busy="true" aria-label="Loading"><i></i><i></i><i></i></div></main>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+  </body>
+</html>

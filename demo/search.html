@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lakeshore Lending — Products</title>
+    <link rel="stylesheet" href="/site.css" />
+    <script>
+      window.Assist = window.Assist || { q: [] };
+      ['init', 'track', 'identify', 'consent', 'on', 'ask', 'tour', 'action', 'highlight', 'tip', 'mute'].forEach(function (m) {
+        Assist[m] = Assist[m] || function () { Assist.q.push([m, [].slice.call(arguments)]); };
+      });
+    </script>
+    <script async src="http://localhost:7821/assist.js" data-key="local-dev-site-key"></script>
+  </head>
+  <body>
+    <header class="top">
+      <span class="logo">Lakeshore Lending</span>
+      <a href="/">Home</a>
+      <a href="/search.html">Products</a>
+      <a href="/settings.html">Settings</a>
+    </header>
+    <div class="wrap">
+      <div class="panel">
+        <h1>Find a loan product</h1>
+        <p class="lead">Search by name.</p>
+        <form id="search-form" class="row" role="search">
+          <input id="q" name="q" type="search" placeholder="Search products" aria-label="Search products" />
+          <button class="btn" type="submit">Search</button>
+          <!-- Planted problem: filters button does nothing -->
+          <button class="btn secondary" type="button" id="filters">Filters</button>
+        </form>
+        <div id="results" aria-live="polite"></div>
+        <!-- Planted problem: looks like a link, isn't one -->
+        <p>Can't find it? <span class="fake-link" id="browse-all">Browse all products</span></p>
+      </div>
+    </div>
+    <script>
+      document.querySelector('#search-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const q = document.querySelector('#q').value;
+        const r = await fetch('/api/search?q=' + encodeURIComponent(q)).then((x) => x.json());
+        const out = document.querySelector('#results');
+        out.textContent = '';
+        if (!r.length) {
+          const p = document.createElement('p');
+          p.textContent = 'No results.';
+          out.append(p);
+          return;
+        }
+        const ul = document.createElement('ul');
+        for (const x of r) {
+          const li = document.createElement('li');
+          li.textContent = x;
+          ul.append(li);
+        }
+        out.append(ul);
+      });
+    </script>
+  </body>
+</html>
