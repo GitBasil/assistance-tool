@@ -4,7 +4,13 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund
+# Lockfile may resolve through a private mirror (Harness/Artifactory). Rewrite to
+# the public registry so the image builds outside that network.
+RUN sed -i \
+      -e 's|https://pkg.harness.io/pkg/[^/]*/npm/npm/|https://registry.npmjs.org/|g' \
+      -e 's|https://artifacts.uwm.com/artifactory/api/npm/[^"]*|https://registry.npmjs.org/|g' \
+      package-lock.json \
+ && npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org/
 COPY tsconfig.json ./
 COPY scripts ./scripts
 COPY src ./src

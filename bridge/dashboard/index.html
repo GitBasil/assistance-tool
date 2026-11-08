@@ -4,23 +4,87 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta http-equiv="Cache-Control" content="no-store" />
     <title>Footsteps</title>
     <link rel="icon" href="/dashboard/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/dashboard/styles.css" />
-    <script type="module" src="/dashboard/app.js"></script>
+    <style>
+      /* Critical first paint: no flash of unstyled app chrome. */
+      html, body { margin: 0; min-height: 100%; }
+      /* Only the login screen is dark — never set body text color globally or
+         it leaks into the white dashboard cards after sign-in. */
+      body.login-screen { background: #0b1220; color: #e2e8f0; font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+      body.login-screen.boot-pending .login-card,
+      body.login-screen.boot-pending .login-foot { opacity: 0; pointer-events: none; }
+      .login-page {
+        min-height: 100vh; display: grid; place-items: center; padding: 24px; position: relative; overflow: hidden;
+        background:
+          radial-gradient(900px 480px at 12% 8%, rgba(37, 99, 235, .26), transparent 55%),
+          radial-gradient(640px 380px at 90% 90%, rgba(14, 165, 233, .12), transparent 52%),
+          linear-gradient(165deg, #0b1220 0%, #111827 50%, #0f172a 100%);
+      }
+      .login-card {
+        position: relative; width: min(392px, 100%); background: #fff; color: #0f172a;
+        border: 1px solid rgba(148, 163, 184, .28); border-radius: 16px; padding: 28px 26px 24px;
+        box-shadow: 0 28px 70px rgba(2, 6, 23, .5); display: grid; gap: 14px;
+        transition: opacity .18s ease;
+      }
+      .login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 2px; }
+      .login-brand strong { display: block; font-size: 1.25rem; letter-spacing: -.01em; }
+      .login-brand span { display: block; color: #64748b; font-size: 13px; margin-top: 2px; }
+      .login-card label { display: grid; gap: 6px; font-size: 12px; font-weight: 600; color: #334155; }
+      .login-card input {
+        height: 44px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0 12px;
+        font: inherit; color: #0f172a; background: #fff;
+      }
+      .login-card input:focus { outline: 0; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, .16); }
+      .login-submit {
+        height: 44px; border: 0; border-radius: 10px; background: #2563eb; color: #fff;
+        font: inherit; font-weight: 600; cursor: pointer; margin-top: 2px;
+      }
+      .login-submit:hover { background: #1d4ed8; }
+      .login-submit:disabled { opacity: .7; cursor: wait; }
+      .login-error { min-height: 1.2em; margin: 0; color: #dc2626; font-size: 13px; font-weight: 500; }
+      .login-foot { margin: 18px 0 0; text-align: center; color: #94a3b8; font-size: 12px; transition: opacity .18s ease; }
+      .boot-spinner {
+        position: absolute; left: 50%; top: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px;
+        border: 2px solid rgba(148, 163, 184, .25); border-top-color: #93c5fd; border-radius: 50%;
+        animation: spin .7s linear infinite;
+      }
+      body:not(.boot-pending) .boot-spinner { display: none; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-spinner { animation: none; border-top-color: #93c5fd; opacity: .7; }
+        .login-card, .login-foot { transition: none; }
+      }
+    </style>
+    <link rel="stylesheet" href="/dashboard/styles.css?v=ui3" />
+    <script type="module" src="/dashboard/app.js?v=ui3"></script>
   </head>
-  <body>
-    <a class="skip" href="#main">Skip to content</a>
-    <aside class="side">
-      <div class="brand"><img src="/dashboard/favicon.svg" alt="" width="22" height="22" />Footsteps <span>insights</span></div>
-      <div id="switcher" class="switcher"></div>
-      <nav id="nav" aria-label="Views"></nav>
-      <div class="side-foot">
-        <div id="live" class="live-status" role="status" aria-live="polite"><i></i><span>Connecting…</span></div>
-        <div id="ver" class="ver"></div>
-      </div>
-    </aside>
-    <main id="main" tabindex="-1"><div class="skeleton" aria-busy="true" aria-label="Loading"><i></i><i></i><i></i></div></main>
-    <div id="toasts" class="toasts" aria-live="polite"></div>
+  <body class="login-screen boot-pending">
+    <div class="login-page" id="login-root">
+      <div class="login-glow" aria-hidden="true"></div>
+      <div class="boot-spinner" role="status" aria-label="Loading"></div>
+      <form class="login-card" id="login-form" method="post" action="/api/auth/login" novalidate>
+        <div class="login-brand">
+          <img src="/dashboard/favicon.svg" alt="" width="36" height="36" />
+          <div>
+            <strong>Footsteps</strong>
+            <span>Sign in to your workspace</span>
+          </div>
+        </div>
+        <label class="field">
+          Username
+          <input name="username" autocomplete="username" required maxlength="40" spellcheck="false" autocapitalize="off" />
+        </label>
+        <label class="field">
+          Password
+          <input name="password" type="password" autocomplete="current-password" required minlength="8" />
+        </label>
+        <p class="login-error" id="login-error" role="alert"></p>
+        <button type="submit" class="primary login-submit">Sign in</button>
+      </form>
+      <p class="login-foot">Private dashboard · authorized users only</p>
+    </div>
   </body>
 </html>

@@ -102,6 +102,14 @@ export function readBody(req: IncomingMessage, limit = MAX_BODY): Promise<Buffer
 export const SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
+  'X-Frame-Options': 'DENY',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+};
+
+/** Extra lock-down for the dashboard HTML/JS/CSS only (not public /assist.js). */
+export const DASHBOARD_HEADERS: Record<string, string> = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
 };
 
 /**
@@ -109,4 +117,4 @@ export const SECURITY_HEADERS: Record<string, string> = {
  * in a script-less sandboxed srcdoc iframe (which inherits this policy), so the site's
  * stylesheets, fonts and images may load but nothing captured can ever execute.
  */
-export const DASHBOARD_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' http: https:; font-src 'self' data: http: https:; img-src 'self' data: http: https:; frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self' http: https:; form-action 'none'; frame-ancestors 'none'";
+export const DASHBOARD_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' http: https:; font-src 'self' data: http: https:; img-src 'self' data: http: https:; frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self' http: https:; form-action 'self'; frame-ancestors 'none'";

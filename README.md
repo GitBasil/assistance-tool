@@ -168,7 +168,7 @@ Set `ASSIST_PUBLIC_URL` to the address your sites will load the script from (for
 
 Without Docker: `npm ci && npm run build && npm run build:server`, then `ASSIST_HOST=0.0.0.0 npm run start:prod`.
 
-**The dashboard has no login yet** (planned for the next phase). Until then, anyone who can reach the server can view and change every site. Keep it on a private network or VPN, or put it behind a proxy that authenticates (for example basic auth or SSO on `/dashboard` and `/api/`), while leaving `/assist.js`, `/chunks/`, `/collect` and `/config` public for your sites.
+**The dashboard requires a signed-in user.** The first boot creates admin `basil` / `Pass@123` (change this). Admins can add more users from **Manage users**. Public collect stays open: `/assist.js`, hashed chunks, `/collect` and `/config` need no login.
 
 ### Upgrading from the file store
 

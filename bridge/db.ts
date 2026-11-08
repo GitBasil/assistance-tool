@@ -30,6 +30,25 @@ const MIGRATIONS = [
    CREATE INDEX events_site_at ON events (site, at);
    CREATE INDEX events_vid ON events (vid);
    CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`,
+  `CREATE TABLE users (
+     id TEXT PRIMARY KEY,
+     username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+     password_hash TEXT NOT NULL,
+     role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   );
+   CREATE TABLE sessions (
+     id TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     token_hash TEXT NOT NULL UNIQUE,
+     created_at INTEGER NOT NULL,
+     expires_at INTEGER NOT NULL,
+     ip TEXT NOT NULL DEFAULT '',
+     ua TEXT NOT NULL DEFAULT ''
+   );
+   CREATE INDEX sessions_user ON sessions (user_id);
+   CREATE INDEX sessions_expires ON sessions (expires_at);`,
 ];
 
 export type Db = DatabaseSync;

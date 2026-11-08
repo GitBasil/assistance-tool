@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Widgets — Sign up</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="https://ultrainnovate.com/assist.js" data-key="pk_JlLYD-sfs7N10xHo"></script>
+  </head>
+  <body>
+    <header class="top">
+      <a class="logo" href="/">Acme Widgets</a>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/shop.html">Shop</a>
+        <a href="/signup.html" aria-current="page">Sign up</a>
+      </nav>
+    </header>
+
+    <main class="wrap narrow">
+      <h1>Create an account</h1>
+      <p class="lead">Phone must be exactly <code>555-0100</code> — the hint is missing on purpose.</p>
+
+      <form id="signup" class="stack" novalidate>
+        <label>
+          Full name
+          <input id="name" name="name" type="text" required autocomplete="name" />
+        </label>
+        <label>
+          Email
+          <input id="email" name="email" type="email" required autocomplete="email" />
+        </label>
+        <label>
+          Phone
+          <input id="phone" name="phone" type="tel" required autocomplete="tel" placeholder="(555) 010-0000" />
+        </label>
+        <p id="error" class="error" hidden role="alert"></p>
+        <!-- Looks disabled until validation passes; still clickable for err-clicks -->
+        <button id="submit" class="btn looks-disabled" type="submit">Create account</button>
+      </form>
+
+      <p id="done" class="success" hidden>Account created. You can close this tab.</p>
+    </main>
+
+    <script>
+      const form = document.getElementById('signup');
+      const phone = document.getElementById('phone');
+      const error = document.getElementById('error');
+      const done = document.getElementById('done');
+      const submit = document.getElementById('submit');
+
+      function syncDisabledLook() {
+        const ok = phone.value.trim() === '555-0100';
+        submit.classList.toggle('looks-disabled', !ok);
+      }
+
+      phone.addEventListener('input', syncDisabledLook);
+      syncDisabledLook();
+
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        error.hidden = true;
+
+        if (!document.getElementById('name').value.trim()) {
+          error.hidden = false;
+          error.textContent = 'Name is required.';
+          return;
+        }
+        if (!document.getElementById('email').value.includes('@')) {
+          error.hidden = false;
+          error.textContent = 'Enter a valid email.';
+          return;
+        }
+        // Hidden format rule — validation loop bait.
+        if (phone.value.trim() !== '555-0100') {
+          error.hidden = false;
+          error.textContent = 'Phone number is invalid.';
+          return;
+        }
+
+        form.hidden = true;
+        done.hidden = false;
+      });
+    </script>
+  </body>
+</html>

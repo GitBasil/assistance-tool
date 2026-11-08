@@ -3,11 +3,12 @@ import { gunzipSync } from 'node:zlib';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { loadConfig, ROOT, type BridgeConfig } from './config';
-import { cors, hostOk, originAllowed, readBody, RateLimiter, HttpError, tokenOk, selfOrigin, clientIp, SECURITY_HEADERS, DASHBOARD_CSP } from './security';
+import { cors, hostOk, originAllowed, readBody, RateLimiter, HttpError, tokenOk, selfOrigin, clientIp, SECURITY_HEADERS, DASHBOARD_HEADERS, DASHBOARD_CSP } from './security';
 import { Store, type StoredEvent } from './store';
 import { Aggregator } from './aggregate';
 import { openDb, type Db } from './db';
 import { Sites, SiteError, hostOf, newKey, normDomain, type Site } from './sites';
+import { Auth, AuthError, type SessionUser } from './auth';
 import { log, setupLog } from './log';
 
 const VERSION: string = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
@@ -20,15 +21,17 @@ let cfg: BridgeConfig;
 let db: Db;
 let store: Store;
 let sites: Sites;
+let auth: Auth;
 let agg = new Aggregator();
 // Per client per minute. Watched pages upload up to ~4x/s each, and the live dashboard refetches on every batch.
-const limiter = new RateLimiter({ collect: 6000, api: 6000, config: 600 });
+const limiter = new RateLimiter({ collect: 6000, api: 6000, config: 600, auth: 12 });
 const stats = { accepted: 0, rejected: 0, events: 0, snapshots: 0, started: Date.now() };
+const secureCookies = () => cfg.publicUrl.startsWith('https:');
 
 // ---------------- helpers ----------------
 function send(res: ServerResponse, status: number, body?: unknown, headers: Record<string, string> = {}) {
   for (const [k, v] of Object.entries({ ...SECURITY_HEADERS, ...headers })) res.setHeader(k, v);
-  if (cfg?.publicUrl.startsWith('https:')) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+  if (cfg?.publicUrl.startsWith('https:')) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   if (body === undefined) return void res.writeHead(status).end();
   const s = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
   if (!res.hasHeader('content-type')) res.setHeader('content-type', typeof body === 'object' && !Buffer.isBuffer(body) ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8');
@@ -262,10 +265,95 @@ function rebuildSite(id: string) {
   store.replay((e) => agg.add(e), { site: id });
 }
 
-async function api(req: IncomingMessage, res: ServerResponse, path: string, q: URLSearchParams, onSite: boolean) {
+async function authApi(req: IncomingMessage, res: ServerResponse, path: string, user: SessionUser | null) {
+  const parts = path.split('/'); // '', 'api', 'auth', action...
+  const action = parts[3];
+  const id = parts[4] && decodeURIComponent(parts[4]);
+
+  if (action === 'login' && req.method === 'POST') {
+    const who = clientIp(req, cfg.trustProxy);
+    if (!limiter.allow(who, 'auth')) return send(res, 429, { error: 'Too many sign-in attempts. Wait a minute and try again.' });
+    const b = await jsonBody(req);
+    try {
+      const { user: u, token, expiresAt } = auth.login(String(b.username || ''), String(b.password || ''), {
+        ip: who,
+        ua: String(req.headers['user-agent'] || ''),
+      });
+      auth.setSessionCookie(res, token, expiresAt, secureCookies());
+      log.info('user signed in', { user: u.id, username: u.username });
+      return send(res, 200, { user: u });
+    } catch (e) {
+      if (e instanceof AuthError) return send(res, 401, { error: e.message });
+      throw e;
+    }
+  }
+
+  if (action === 'logout' && req.method === 'POST') {
+    auth.logout(req);
+    auth.clearSessionCookie(res, secureCookies());
+    return send(res, 200, { ok: true });
+  }
+
+  if (action === 'me' && req.method === 'GET') {
+    if (!user) return send(res, 401, { error: 'Sign in required.' });
+    return send(res, 200, { user });
+  }
+
+  // /api/users — admin user management (mounted under authApi for path /api/users)
+  return send(res, 404, { error: 'unknown api' });
+}
+
+async function usersApi(req: IncomingMessage, res: ServerResponse, id: string | undefined, user: SessionUser) {
+  if (user.role !== 'admin') return send(res, 403, { error: 'Only an admin can manage users.' });
+  const m = req.method;
+  if (!id) {
+    if (m === 'GET') return send(res, 200, auth.list());
+    if (m === 'POST') {
+      const b = await jsonBody(req);
+      try {
+        const u = auth.create({ username: b.username, password: b.password, role: b.role });
+        log.info('user created', { user: u.id, username: u.username, by: user.id });
+        return send(res, 201, u);
+      } catch (e) {
+        if (e instanceof AuthError) return send(res, 400, { error: e.message });
+        throw e;
+      }
+    }
+    return send(res, 405);
+  }
+  if (m === 'PUT') {
+    const b = await jsonBody(req);
+    try {
+      const u = auth.update(id, { password: b.password, role: b.role });
+      log.info('user updated', { user: u.id, by: user.id });
+      return send(res, 200, u);
+    } catch (e) {
+      if (e instanceof AuthError) return send(res, 400, { error: e.message });
+      throw e;
+    }
+  }
+  if (m === 'DELETE') {
+    try {
+      auth.remove(id, user.id);
+      log.info('user deleted', { user: id, by: user.id });
+      return send(res, 200, { ok: true });
+    } catch (e) {
+      if (e instanceof AuthError) return send(res, 400, { error: e.message });
+      throw e;
+    }
+  }
+  return send(res, 405);
+}
+
+async function api(req: IncomingMessage, res: ServerResponse, path: string, q: URLSearchParams, onSite: boolean, user: SessionUser | null) {
   const [, , name, id, sub, arg] = path.split('/');
+  if (name === 'auth') return authApi(req, res, path, user);
+  if (name === 'users' && !onSite) {
+    if (!user) return send(res, 401, { error: 'Sign in required.' });
+    return usersApi(req, res, id && decodeURIComponent(id), user);
+  }
   if (name === 'sites' && !onSite) return sitesApi(req, res, id && decodeURIComponent(id), sub, arg);
-  if (name === 'meta' && !onSite) return send(res, 200, { version: VERSION, publicUrl: cfg.publicUrl, scriptUrl: scriptUrl(), token: cfg.dashboardToken, retentionDays: cfg.retentionDays, ingest: stats });
+  if (name === 'meta' && !onSite) return send(res, 200, { version: VERSION, publicUrl: cfg.publicUrl, scriptUrl: scriptUrl(), token: cfg.dashboardToken, retentionDays: cfg.retentionDays, ingest: stats, user });
 
   // Everything else is about one site: `site` is its id. The on-site heatmap only knows the page's host.
   const want = q.get('site') || '';
@@ -406,11 +494,31 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (path.startsWith('/api/')) {
     // Same-origin dashboard, or a site origin carrying the dashboard token (on-site heatmap).
     const onSite = !self;
-    if (onSite && !tokenOk(cfg, q.get('token'))) return send(res, 403, { error: 'dashboard token required' });
-    return api(req, res, path, q, onSite);
+    const isLogin = path === '/api/auth/login' && req.method === 'POST';
+    const user = auth.userFromRequest(req);
+    if (onSite) {
+      if (!tokenOk(cfg, q.get('token'))) return send(res, 403, { error: 'dashboard token required' });
+      return api(req, res, path, q, true, user);
+    }
+    // Dashboard API requires a signed-in user (except login).
+    if (!isLogin && !user) return send(res, 401, { error: 'Sign in required.' });
+    if (user) auth.maybeRefreshCookie(req, res, secureCookies());
+    return api(req, res, path, q, false, user);
   }
-  if (path === '/' || path === '/dashboard') return file(res, DASH, 'index.html', { 'content-security-policy': DASHBOARD_CSP, 'cache-control': 'no-cache' });
-  if (path.startsWith('/dashboard/')) return file(res, DASH, path.slice('/dashboard/'.length), { 'content-security-policy': DASHBOARD_CSP, 'cache-control': 'no-cache' });
+  const dashHeaders = {
+    ...DASHBOARD_HEADERS,
+    'content-security-policy': DASHBOARD_CSP,
+    // Keep Cloudflare / browsers from serving a stale pre-auth shell.
+    'cache-control': 'no-store, no-cache, must-revalidate',
+    'cdn-cache-control': 'no-store',
+    'cloudflare-cdn-cache-control': 'no-store',
+  };
+  if (path === '/dashboard/') {
+    res.writeHead(302, { location: '/dashboard', ...SECURITY_HEADERS });
+    return void res.end();
+  }
+  if (path === '/' || path === '/dashboard') return file(res, DASH, 'index.html', dashHeaders);
+  if (path.startsWith('/dashboard/')) return file(res, DASH, path.slice('/dashboard/'.length), dashHeaders);
   send(res, 404, { error: 'not found' });
 }
 
@@ -455,6 +563,9 @@ async function main() {
   db = openDb(join(cfg.dataDir, 'assist.db'));
   store = new Store(db, cfg.dataDir);
   sites = new Sites(db);
+  auth = new Auth(db);
+  const boot = auth.ensureBootstrap('basil', 'Pass@123');
+  if (boot) log.info('created initial admin user', { username: boot.username });
   await migrateLegacy();
   const purged = store.purge(retention);
   const t0 = Date.now();

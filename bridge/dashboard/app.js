@@ -3,9 +3,10 @@
 // script-less sandboxed iframe.
 
 const $ = (s, r = document) => r.querySelector(s);
-const main = $('#main');
+/** Resolved on each use — the login page has no `#main` until after sign-in. */
+const mainEl = () => $('#main');
 /** `site` is a site id; `sites` the registry with headline numbers; `range` the report window. */
-const state = { site: '', sites: [], token: '', meta: null, range: localStorage.getItem('assist-range') || '7d' };
+const state = { site: '', sites: [], token: '', meta: null, user: null, range: localStorage.getItem('assist-range') || '7d' };
 
 function el(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
@@ -26,9 +27,15 @@ const svgEl = (tag, attrs = {}) => {
   return e;
 };
 
+class AuthRequired extends Error {
+  constructor() {
+    super('Sign in required.');
+  }
+}
+
 async function api(path, params = {}, method = 'GET', body) {
   const q = new URLSearchParams({ site: state.site, range: state.range === 'all' ? '' : state.range, ...params });
-  const init = { method };
+  const init = { method, credentials: 'same-origin' };
   if (body !== undefined) Object.assign(init, { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
   let r;
   try {
@@ -36,15 +43,20 @@ async function api(path, params = {}, method = 'GET', body) {
   } catch {
     throw new Error('Could not reach the server. Check that it is running.');
   }
+  if (r.status === 401 && path !== 'auth/login') throw new AuthRequired();
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-  return r.json();
+  if (r.status === 204) return null;
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
 }
 
 // ---------------- feedback: toasts, confirm, copy ----------------
 function toast(text, kind = 'ok') {
-  for (const old of $('#toasts').children) if (old.textContent === text) old.remove();
+  const box = $('#toasts');
+  if (!box) return;
+  for (const old of box.children) if (old.textContent === text) old.remove();
   const t = el('div', { class: 'toast ' + kind, role: kind === 'error' ? 'alert' : 'status' }, el('span', { text }));
-  $('#toasts').append(t);
+  box.append(t);
   setTimeout(() => t.classList.add('out'), kind === 'error' ? 6000 : 2600);
   setTimeout(() => t.remove(), kind === 'error' ? 6400 : 3000);
 }
@@ -2257,6 +2269,136 @@ const views = {
     return [...header('Add a site', null, { crumbs: [['All sites', 'sites'], 'New site'] }), form];
   },
 
+  async users() {
+    if (state.user?.role !== 'admin') {
+      return [...header('Users', 'Only an admin can manage who signs in.'), el('div', { class: 'empty' }, el('p', { text: 'Ask an admin if you need access for a teammate.' }))];
+    }
+    const rows = await api('users', { site: '', range: '' });
+    const username = el('input', { required: true, maxlength: 40, autocomplete: 'off', placeholder: 'jane' });
+    const password = el('input', { type: 'password', required: true, minlength: 8, autocomplete: 'new-password', placeholder: 'At least 8 characters' });
+    const role = el('select', {}, el('option', { value: 'user', text: 'User' }), el('option', { value: 'admin', text: 'Admin' }));
+    const err = el('p', { class: 'form-error', role: 'alert' });
+    const submit = el('button', { type: 'submit', class: 'primary', text: 'Add user' });
+    const form = el(
+      'form',
+      { class: 'panel', novalidate: true },
+      el('h2', { text: 'Add a user' }),
+      el('p', { class: 'muted', text: 'They can sign in to this dashboard. Admins can manage sites and other users.' }),
+      el('div', { class: 'form-grid' }, field('Username', username), field('Password', password), field('Role', role)),
+      err,
+      el('div', { class: 'form-actions' }, submit),
+    );
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      submit.disabled = true;
+      try {
+        await api('users', { site: '', range: '' }, 'POST', { username: username.value, password: password.value, role: role.value });
+        toast(`Added ${username.value.trim().toLowerCase()}.`);
+        username.value = '';
+        password.value = '';
+        role.value = 'user';
+        render();
+      } catch (x) {
+        err.textContent = x.message;
+      } finally {
+        submit.disabled = false;
+      }
+    });
+
+    const table = el(
+      'div',
+      { class: 'panel' },
+      el('h2', { text: 'People with access' }),
+      el(
+        'table',
+        { class: 'data' },
+        el('thead', {}, el('tr', {}, el('th', { text: 'Username' }), el('th', { text: 'Role' }), el('th', { text: 'Added' }), el('th', { text: '' }))),
+        el(
+          'tbody',
+          {},
+          ...rows.map((u) =>
+            el(
+              'tr',
+              {},
+              el('td', {}, el('strong', { text: u.username }), u.id === state.user.id ? el('span', { class: 'badge ended', text: 'you' }) : null),
+              el('td', { text: u.role === 'admin' ? 'Admin' : 'User' }),
+              el('td', { class: 'muted', text: dayTime(u.createdAt) }),
+              el(
+                'td',
+                { class: 'row-actions' },
+                el('button', {
+                  type: 'button',
+                  class: 'link',
+                  text: 'Reset password',
+                  onclick: async () => {
+                    const next = window.prompt(`New password for ${u.username} (min 8 characters)`);
+                    if (next == null) return;
+                    try {
+                      await api('users/' + encodeURIComponent(u.id), { site: '', range: '' }, 'PUT', { password: next, role: u.role });
+                      toast(`Password updated for ${u.username}.`);
+                    } catch (x) {
+                      toast(x.message, 'error');
+                    }
+                  },
+                }),
+                u.role === 'user'
+                  ? el('button', {
+                      type: 'button',
+                      class: 'link',
+                      text: 'Make admin',
+                      onclick: async () => {
+                        try {
+                          await api('users/' + encodeURIComponent(u.id), { site: '', range: '' }, 'PUT', { role: 'admin' });
+                          toast(`${u.username} is now an admin.`);
+                          render();
+                        } catch (x) {
+                          toast(x.message, 'error');
+                        }
+                      },
+                    })
+                  : u.id !== state.user.id
+                    ? el('button', {
+                        type: 'button',
+                        class: 'link',
+                        text: 'Make user',
+                        onclick: async () => {
+                          try {
+                            await api('users/' + encodeURIComponent(u.id), { site: '', range: '' }, 'PUT', { role: 'user' });
+                            toast(`${u.username} is now a user.`);
+                            render();
+                          } catch (x) {
+                            toast(x.message, 'error');
+                          }
+                        },
+                      })
+                    : null,
+                u.id !== state.user.id
+                  ? el('button', {
+                      type: 'button',
+                      class: 'link danger-text',
+                      text: 'Remove',
+                      onclick: async () => {
+                        if (!(await confirmDialog({ title: `Remove ${u.username}?`, body: 'They will be signed out and can no longer open this dashboard.', action: 'Remove', danger: true }))) return;
+                        try {
+                          await api('users/' + encodeURIComponent(u.id), { site: '', range: '' }, 'DELETE');
+                          toast(`${u.username} removed.`);
+                          render();
+                        } catch (x) {
+                          toast(x.message, 'error');
+                        }
+                      },
+                    })
+                  : null,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    return [...header('Users', 'Who can sign in to Footsteps.'), form, table];
+  },
+
   async settings() {
     const s = await api('sites/' + encodeURIComponent(state.site));
     const c = s.config || {};
@@ -2853,7 +2995,7 @@ const NAV = [
   ['Site', [['settings', 'Setup & settings']]],
 ];
 /** Views that aren't about one site. */
-const GLOBAL = new Set(['sites', 'site-new']);
+const GLOBAL = new Set(['sites', 'site-new', 'users']);
 /** Views that honour the date range. */
 const RANGED = new Set(['overview', 'heatmap', 'frustration', 'errors', 'forms', 'funnels', 'performance', 'sessions']);
 const RANGES = [['24h', '24 h'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All']];
@@ -3020,6 +3162,8 @@ async function render() {
     if (slot) return slot.append(rangeControl()), nodes;
     return [el('div', { class: 'tools' }, rangeControl()), ...nodes];
   };
+  const main = mainEl();
+  if (!main) return showLogin();
   main.replaceChildren(el('div', { class: 'skeleton', 'aria-busy': 'true', 'aria-label': 'Loading' }, el('i'), el('i'), el('i')));
   try {
     const nodes = withTools((await fn()).flat().filter(Boolean));
@@ -3054,31 +3198,186 @@ async function render() {
       };
     }
   } catch (e) {
+    if (e instanceof AuthRequired) return showLogin();
     if (gen !== viewGen) return;
     main.replaceChildren(el('div', { class: 'empty error-state' }, el('strong', { text: 'This page could not load.' }), el('p', { text: e.message }), el('button', { type: 'button', text: 'Try again', onclick: () => render() })));
   }
 }
 
-async function boot() {
-  $('#nav').append(
+function setShellVisible(on) {
+  document.body.classList.toggle('authed', on);
+  document.body.classList.toggle('login-screen', !on);
+}
+
+let hashBound = false;
+
+function renderAccount() {
+  const box = $('#account');
+  if (!box || !state.user) return;
+  box.hidden = false;
+  box.replaceChildren(
+    el('div', { class: 'account-who' }, el('strong', { text: state.user.username }), el('span', { text: state.user.role === 'admin' ? 'Admin' : 'User' })),
+    state.user.role === 'admin' ? el('button', { type: 'button', class: 'link account-link', text: 'Manage users', onclick: () => go('users') }) : null,
+    el('button', {
+      type: 'button',
+      class: 'link account-link',
+      text: 'Sign out',
+      onclick: async () => {
+        try {
+          await api('auth/logout', { site: '', range: '' }, 'POST', {});
+        } catch {
+        }
+        live.es?.close();
+        live.es = null;
+        state.user = null;
+        showLogin();
+      },
+    }),
+  );
+}
+
+function bindLoginForm(form) {
+  if (!form || form.dataset.bound === '1') return form;
+  form.dataset.bound = '1';
+  const user = form.querySelector('[name=username]');
+  const pass = form.querySelector('[name=password]');
+  const err = $('#login-error') || form.querySelector('.login-error');
+  const goBtn = form.querySelector('button[type=submit]');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (err) err.textContent = '';
+    if (goBtn) {
+      goBtn.disabled = true;
+      goBtn.textContent = 'Signing in…';
+    }
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: user.value, password: pass.value }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || 'Sign in failed.');
+      state.user = body.user;
+      document.title = 'Footsteps';
+      await enterApp();
+    } catch (x) {
+      if (err) err.textContent = x.message;
+      if (goBtn) {
+        goBtn.disabled = false;
+        goBtn.textContent = 'Sign in';
+      }
+      pass?.focus();
+      pass?.select();
+    }
+  });
+  return form;
+}
+
+function showLogin(message = '') {
+  setShellVisible(false);
+  document.body.classList.remove('boot-pending');
+  document.body.classList.add('login-screen');
+  live.es?.close();
+  live.es = null;
+  document.title = 'Footsteps — Sign in';
+
+  // Prefer the static login markup so the first paint is already the sign-in screen.
+  let form = $('#login-form');
+  if (!form || !$('#login-root')) {
+    document.body.replaceChildren(
+      el(
+        'div',
+        { class: 'login-page', id: 'login-root' },
+        el('div', { class: 'login-glow', 'aria-hidden': 'true' }),
+        el(
+          'form',
+          { class: 'login-card', id: 'login-form', novalidate: true },
+          el('div', { class: 'login-brand' }, el('img', { src: '/dashboard/favicon.svg', alt: '', width: '36', height: '36' }), el('div', {}, el('strong', { text: 'Footsteps' }), el('span', { text: 'Sign in to continue' }))),
+          el('label', { class: 'field' }, el('span', { text: 'Username' }), el('input', { name: 'username', autocomplete: 'username', required: true, maxlength: '40', placeholder: 'Username' })),
+          el('label', { class: 'field' }, el('span', { text: 'Password' }), el('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true, placeholder: 'Password' })),
+          el('p', { class: 'login-error', id: 'login-error', role: 'alert' }),
+          el('button', { type: 'submit', class: 'primary login-submit', text: 'Sign in' }),
+        ),
+        el('p', { class: 'login-foot', text: 'Authorized users only' }),
+      ),
+    );
+    form = $('#login-form');
+  }
+  bindLoginForm(form);
+  const err = $('#login-error');
+  if (err && message) err.textContent = message;
+  setTimeout(() => form.querySelector('[name=username]')?.focus());
+}
+
+async function enterApp() {
+  document.body.classList.remove('boot-pending', 'login-screen');
+  document.body.replaceChildren(
+    el('a', { class: 'skip', href: '#main', text: 'Skip to content' }),
+    el(
+      'aside',
+      { class: 'side' },
+      el('div', { class: 'brand' }, el('img', { src: '/dashboard/favicon.svg', alt: '', width: '22', height: '22' }), 'Footsteps ', el('span', { text: 'insights' })),
+      el('div', { id: 'switcher', class: 'switcher' }),
+      el('nav', { id: 'nav', 'aria-label': 'Views' }),
+      el(
+        'div',
+        { class: 'side-foot' },
+        el('div', { id: 'account', class: 'account' }),
+        el('div', { id: 'live', class: 'live-status', role: 'status', 'aria-live': 'polite' }, el('i'), el('span', { text: 'Connecting…' })),
+        el('div', { id: 'ver', class: 'ver' }),
+      ),
+    ),
+    el('main', { id: 'main', tabindex: '-1' }, el('div', { class: 'skeleton', 'aria-busy': 'true', 'aria-label': 'Loading' }, el('i'), el('i'), el('i'))),
+    el('div', { id: 'toasts', class: 'toasts', 'aria-live': 'polite' }),
+  );
+  setShellVisible(true);
+  $('#nav').replaceChildren(
     ...NAV.map(([group, items]) =>
       el('div', { class: 'nav-group' }, el('div', { class: 'nav-label', text: group }), items.map(([v, t]) => el('a', { href: '#' + v, 'data-v': v, text: t, onclick: (e) => (e.preventDefault(), go(v)) }))),
     ),
   );
+  renderAccount();
   try {
     state.meta = await api('meta');
     state.token = state.meta.token;
+    if (state.meta.user) state.user = state.meta.user;
     $('#ver').textContent = 'v' + state.meta.version;
     await loadSites();
   } catch (e) {
-    main.replaceChildren(el('div', { class: 'empty error-state' }, el('strong', { text: 'Cannot reach the Footsteps server.' }), el('p', { text: e.message }), el('button', { type: 'button', text: 'Try again', onclick: () => location.reload() })));
+    if (e instanceof AuthRequired) return showLogin();
+    const mainEl = $('#main');
+    mainEl.replaceChildren(el('div', { class: 'empty error-state' }, el('strong', { text: 'Cannot reach the Footsteps server.' }), el('p', { text: e.message }), el('button', { type: 'button', text: 'Try again', onclick: () => location.reload() })));
     return;
   }
-  // Busiest site first by default; a remembered choice wins if that site still exists.
   const remembered = localStorage.getItem('assist-site');
   const byActivity = [...state.sites].sort((a, b) => b.lastEvent - a.lastEvent);
   state.site = state.sites.some((s) => s.id === remembered) ? remembered : byActivity[0]?.id || '';
-  addEventListener('hashchange', render);
+  if (!hashBound) {
+    addEventListener('hashchange', render);
+    hashBound = true;
+  }
   render();
+}
+
+async function boot() {
+  // HTML starts in boot-pending (spinner, form hidden) so a signed-in refresh
+  // never flashes the login card, and a signed-out visit still lands on login.
+  try {
+    const me = await fetch('/api/auth/me', { credentials: 'same-origin' });
+    if (me.status === 401) {
+      showLogin();
+      return;
+    }
+    if (!me.ok) {
+      showLogin('Could not reach the Footsteps server.');
+      return;
+    }
+    state.user = (await me.json()).user;
+    await enterApp();
+  } catch (e) {
+    showLogin(e.message || 'Could not reach the Footsteps server.');
+  }
 }
 boot();

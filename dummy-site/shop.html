@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Widgets — Shop</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="https://ultrainnovate.com/assist.js" data-key="pk_JlLYD-sfs7N10xHo"></script>
+  </head>
+  <body>
+    <header class="top">
+      <a class="logo" href="/">Acme Widgets</a>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/shop.html" aria-current="page">Shop</a>
+        <a href="/signup.html">Sign up</a>
+      </nav>
+    </header>
+
+    <main class="wrap">
+      <h1>Shop</h1>
+      <p class="lead">Find a widget. Synonyms like “gadget” return nothing — try rage-clicking Filters.</p>
+
+      <form id="search-form" class="row" action="#" method="get">
+        <label>
+          Search
+          <input id="q" name="q" type="search" placeholder="e.g. blue, hinge, lamp" autocomplete="off" />
+        </label>
+        <button class="btn" type="submit">Search</button>
+        <!-- Planted dead control: looks like a filter, does nothing -->
+        <button id="filters" class="btn ghost" type="button">Filters</button>
+      </form>
+
+      <p id="status" class="status" aria-live="polite">Showing all products.</p>
+      <ul id="results" class="results"></ul>
+
+      <p class="hint">
+        Stuck? <a id="learn-more" href="#">Learn more</a>
+        <!-- Planted fake link: href="#" with preventDefault -->
+      </p>
+    </main>
+
+    <script>
+      const PRODUCTS = [
+        { name: 'Blue hinge', sku: 'W-101' },
+        { name: 'Red lamp', sku: 'W-204' },
+        { name: 'Steel bracket', sku: 'W-330' },
+        { name: 'Quiet fan', sku: 'W-412' },
+      ];
+
+      const results = document.getElementById('results');
+      const status = document.getElementById('status');
+
+      function render(items) {
+        results.innerHTML = items
+          .map((p) => `<li><strong>${p.name}</strong> <span>${p.sku}</span></li>`)
+          .join('');
+      }
+
+      render(PRODUCTS);
+
+      document.getElementById('search-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const q = document.getElementById('q').value.toLowerCase().trim();
+        // Exact token match only — "blue widget" and "gadget" are dead ends.
+        const hits = q
+          ? PRODUCTS.filter((p) => p.name.toLowerCase().split(/\W+/).includes(q))
+          : PRODUCTS;
+        status.textContent = hits.length
+          ? `Found ${hits.length} product${hits.length === 1 ? '' : 's'}.`
+          : 'No products match. Try a different word.';
+        render(hits);
+      });
+
+      document.getElementById('filters').addEventListener('click', () => {
+        // Intentionally empty — dead click target.
+      });
+
+      document.getElementById('learn-more').addEventListener('click', (e) => {
+        e.preventDefault();
+      });
+    </script>
+  </body>
+</html>
