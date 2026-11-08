@@ -255,19 +255,50 @@ function boot(queue: [string, any[]][]) {
         bus.emit('route', location.href);
       }),
     );
+    // Same-origin navigations are not "left the site". Use pointerdown as well as click:
+    // on mobile, pagehide can run before click fires.
+    let stayOnSite = false;
+    const markStayFromLink = (el: Element | null, e?: Event) => {
+      const a = el?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || a.target === '_blank' || a.hasAttribute('download')) return;
+      if (e && 'metaKey' in e && ((e as MouseEvent).metaKey || (e as MouseEvent).ctrlKey || (e as MouseEvent).shiftKey || (e as MouseEvent).altKey)) return;
+      try {
+        if (new URL(a.href, location.href).origin === location.origin) stayOnSite = true;
+      } catch {}
+    };
     offs.push(
+      on(D, 'pointerdown', (e: PointerEvent) => {
+        if (e.button !== 0) return;
+        markStayFromLink(e.target as Element | null, e);
+      }),
+      on(D, 'click', (e: MouseEvent) => {
+        if (e.defaultPrevented || e.button !== 0) return;
+        markStayFromLink(e.target as Element | null, e);
+      }),
+      on(D, 'submit', (e: Event) => {
+        const f = e.target as HTMLFormElement | null;
+        if (!f || f.target === '_blank') return;
+        try {
+          if (new URL(f.action || location.href, location.href).origin === location.origin) stayOnSite = true;
+        } catch {}
+      }),
       on(D, 'visibilitychange', () => {
         if (D.visibilityState === 'hidden') pageEnd(true);
         else touch(session);
       }),
-      on(W, 'pagehide', () => {
-        emit({ t: 'bye' });
+      on(W, 'pagehide', (e: PageTransitionEvent) => {
+        // bfcache or in-site navigation: session continues on the next page / restore.
+        // Only a real leave (close tab, external URL) should show "Left the site".
+        const keep = e.persisted || stayOnSite;
+        stayOnSite = false;
+        if (!keep) emit({ t: 'bye' });
         pageEnd(true);
       }),
       on(D, 'keydown', () => (lastTyping = now())),
     );
-    // Lets the dashboard tell an open-but-idle tab from a closed one.
-    const hb = setInterval(guard(() => D.visibilityState === 'visible' && emit({ t: 'hb' })), 30000);
+    // Open tabs (including background ones) keep the session live. Browsers throttle
+    // hidden timers toward ~1/min, so the server grace window must outlast that.
+    const hb = setInterval(guard(() => emit({ t: 'hb' })), 30000);
     offs.push(() => clearInterval(hb));
 
     // Deferred work: never during initial load.

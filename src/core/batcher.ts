@@ -18,7 +18,8 @@ export interface Batcher {
 }
 
 /**
- * Buffers events and uploads them in batches: every 5s or 50 events, gzip via
+ * Buffers events and uploads them in batches: every 5s or 50 events (every 250ms, and
+ * page views at once, while a dashboard watches the session live), gzip via
  * CompressionStream (in a worker when available), final flush via sendBeacon
  * (the caller invokes flush(true) on pagehide/visibility-hidden). Failed
  * uploads back off and spill into a capped localStorage queue.
@@ -63,6 +64,8 @@ export function createBatcher(
       });
       if (!res.ok && res.status !== 400 && res.status !== 413) throw new Error(String(res.status));
       session.watched = res.status === 202 ? Date.now() + 60000 : 0;
+      // Remembered per tab so the next page starts in live mode instead of waiting 5 s.
+      if (session.storage) sset('watched', session.watched || undefined, true);
       sent += evs.length;
       bytes += gz?.size || body.length;
       backoff = 0;
@@ -100,6 +103,7 @@ export function createBatcher(
   }
 
   let timer: any = 0;
+  const live = () => (session.watched || 0) > Date.now();
   const schedule = () => {
     if (!timer)
       timer = setTimeout(
@@ -108,7 +112,7 @@ export function createBatcher(
           flush();
           if (q.length) schedule();
         },
-        (session.watched || 0) > Date.now() ? LIVE_FLUSH_MS : FLUSH_MS,
+        live() ? LIVE_FLUSH_MS : FLUSH_MS,
       );
   };
   return {
@@ -120,8 +124,10 @@ export function createBatcher(
       }
       count++;
       q.push(e);
-      if (q.length >= FLUSH_N) flush();
-      schedule();
+      // While a dashboard watches, a new page is announced the moment it opens: that page
+      // view is what moves the live replay to the next screen.
+      if (q.length >= FLUSH_N || (e.t === 'pv' && live())) flush();
+      if (q.length) schedule();
     },
     flush,
     newPage() {

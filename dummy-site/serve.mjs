@@ -20,12 +20,23 @@ createServer((req, res) => {
     res.writeHead(404).end('not found');
     return;
   }
+  const type = TYPES[extname(path)] || 'application/octet-stream';
+  let body = readFileSync(path);
+  // Embed CSS in HTML so recordings stay self-contained on phones (no localhost <link>).
+  if (extname(path) === '.html') {
+    const css = readFileSync(join(ROOT, 'styles.css'), 'utf8');
+    body = Buffer.from(
+      body
+        .toString('utf8')
+        .replace(/<link\s+rel="stylesheet"\s+href="\/styles\.css"\s*\/?>/i, `<style>\n${css}\n</style>`),
+    );
+  }
   res
     .writeHead(200, {
-      'content-type': TYPES[extname(path)] || 'application/octet-stream',
+      'content-type': type,
       'cache-control': 'no-cache',
     })
-    .end(readFileSync(path));
+    .end(body);
 }).listen(PORT, '127.0.0.1', () => {
   console.log(`[dummy-site] http://localhost:${PORT}`);
   console.log(`[dummy-site] dashboard https://ultrainnovate.com/dashboard`);

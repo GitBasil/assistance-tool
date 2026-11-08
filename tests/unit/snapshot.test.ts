@@ -127,4 +127,79 @@ describe('snapshot serializer (mask off)', () => {
     expect(html).not.toContain('hunter2');
     expect(html).not.toContain('steal');
   });
+
+  it('inlines linked stylesheets so HTTPS replay is not a blank white page', async () => {
+    document.head.innerHTML = '';
+    document.body.innerHTML = '<p class="hero">Widgets</p>';
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://cdn.example/styles.css';
+    Object.defineProperty(link, 'sheet', {
+      configurable: true,
+      get: () => ({
+        cssRules: [{ cssText: '.hero{background:#f3efe6}body{background:url(bg.png)}' }],
+      }),
+    });
+    document.head.appendChild(link);
+    const fetch = vi.fn(async (url: string) => {
+      if (String(url).includes('/collect')) return new Response('', { status: 204 });
+      return new Response('.from-fetch{color:blue}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    delete (window as any).requestIdleCallback;
+    delete (window as any).CompressionStream;
+    delete (globalThis as any).CompressionStream;
+    const mem = new Map<string, unknown>();
+    bus = new Bus();
+    install({
+      session: { recording: true },
+      bus,
+      now: () => performance.now(),
+      send: (e: unknown) => sent.push(e),
+      store: { get: (k: string, d: unknown) => (mem.has(k) ? mem.get(k) : d), set: (k: string, v: unknown) => mem.set(k, v) },
+      cfg: { endpoint: 'http://localhost:7821', key: 'k', site: 's', mask: false },
+    } as any);
+    await vi.waitFor(() => expect(fetch.mock.calls.some((c) => String(c[0]).includes('/collect'))).toBe(true), { timeout: 4000 });
+    const body = (fetch.mock.calls.find((c) => String(c[0]).includes('/collect')) as any)[1].body;
+    const snap = JSON.parse(body).snap;
+    expect(snap.html).toMatch(/data-assist-css="/);
+    expect(snap.html).not.toMatch(/<link[^>]*stylesheet/i);
+    const css = Object.values(snap.css || {}).join('\n');
+    expect(css).toContain('.hero{background:#f3efe6}');
+    expect(css).toContain('url(https://cdn.example/bg.png)');
+  });
+
+  it('fetches stylesheet text when cssRules are unavailable', async () => {
+    document.head.innerHTML = '';
+    document.body.innerHTML = '<p class="hero">Widgets</p>';
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'http://localhost:5180/styles.css';
+    Object.defineProperty(link, 'sheet', { configurable: true, get: () => null });
+    document.head.appendChild(link);
+    const fetch = vi.fn(async (url: string) => {
+      if (String(url).includes('styles.css')) return new Response('.hero{background:#f3efe6}', { status: 200 });
+      return new Response('', { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    delete (window as any).requestIdleCallback;
+    delete (window as any).CompressionStream;
+    delete (globalThis as any).CompressionStream;
+    const mem = new Map<string, unknown>();
+    bus = new Bus();
+    install({
+      session: { recording: true },
+      bus,
+      now: () => performance.now(),
+      send: (e: unknown) => sent.push(e),
+      store: { get: (k: string, d: unknown) => (mem.has(k) ? mem.get(k) : d), set: (k: string, v: unknown) => mem.set(k, v) },
+      cfg: { endpoint: 'http://localhost:7821', key: 'k', site: 's', mask: false },
+    } as any);
+    await vi.waitFor(() => expect(fetch.mock.calls.some((c) => String(c[0]).includes('/collect'))).toBe(true), { timeout: 4000 });
+    const body = (fetch.mock.calls.find((c) => String(c[0]).includes('/collect')) as any)[1].body;
+    const snap = JSON.parse(body).snap;
+    expect(snap.html).toMatch(/data-assist-css="/);
+    expect(Object.values(snap.css || {}).join('\n')).toContain('.hero{background:#f3efe6}');
+    expect(snap.html).not.toMatch(/<link[^>]*stylesheet/i);
+  });
 });

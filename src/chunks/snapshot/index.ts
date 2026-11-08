@@ -17,6 +17,30 @@ const STATE = ['data-shrink', 'data-state', 'aria-expanded', 'aria-selected', 'a
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const mask = (s: string) => s.replace(/\S/g, '•');
 
+/** Read a stylesheet's rules when the browser allows it (same-origin or CORS). */
+const sheetText = (el: HTMLStyleElement | HTMLLinkElement) => {
+  try {
+    return [...(el.sheet?.cssRules || [])].map((r) => r.cssText).join('\n');
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * `url(...)` in an inlined sheet would otherwise resolve against the replay
+ * document (the dashboard), so make every relative URL absolute to the sheet.
+ */
+const absCssUrls = (css: string, base: string) =>
+  css.replace(/url\(\s*(['"]?)([^)'"]+)\1\s*\)/gi, (full, q: string, raw: string) => {
+    const u = raw.trim();
+    if (!u || /^data:|^blob:|^https?:/i.test(u)) return full;
+    try {
+      return `url(${q}${new URL(u, base).href}${q})`;
+    } catch {
+      return full;
+    }
+  });
+
 /**
  * Script-free DOM snapshot used to render replays and heatmaps in the
  * dashboard (sandboxed iframe, no scripts); every element tagged with its
@@ -70,7 +94,10 @@ export default function install(ctx: Ctx) {
     changedAt = ctx.now();
     if (!firstPoke) firstPoke = t;
     clearTimeout(timer);
-    const wait = Math.max(0, Math.min(QUIET, MAX_WAIT - (t - firstPoke)), lastShot + MIN_GAP - t);
+    // While a dashboard watches live, the first frame of a page can't wait out a long quiet
+    // period: it's what the live replay paints as soon as the page is announced.
+    const quiet = (ctx.session.watched || 0) > t ? 150 : QUIET;
+    const wait = Math.max(0, Math.min(quiet, MAX_WAIT - (t - firstPoke)), lastShot + MIN_GAP - t);
     timer = setTimeout(go, wait);
   }
 
@@ -83,18 +110,37 @@ export default function install(ctx: Ctx) {
     }
     busy = true;
     lastShot = Date.now();
-    try {
-      shoot();
-    } catch {
-      finish();
-    }
+    void shoot().catch(() => finish());
   }
 
-  function shoot() {
+  /** cssRules when same-origin; otherwise fetch the sheet so phones aren't left with a bare <link>. */
+  async function loadSheets() {
+    const out = new Map<string, string>();
+    await Promise.all(
+      [...document.querySelectorAll('link[rel~="stylesheet"]')].map(async (el) => {
+        const link = el as HTMLLinkElement;
+        const href = link.href;
+        if (!href || out.has(href)) return;
+        let css = sheetText(link);
+        if (!css.trim()) {
+          try {
+            const r = await fetch(href, { credentials: 'same-origin' });
+            if (r.ok) css = await r.text();
+          } catch {}
+        }
+        if (css.trim()) out.set(href, absCssUrls(css, href));
+      }),
+    );
+    return out;
+  }
+
+  async function shoot() {
   const body = document.body;
   if (!body) return finish();
   const href = location.href;
   const at = changedAt;
+  const sheets = await loadSheets();
+  if (dead || location.href !== href) return finish();
   const tags: string[] = [];
   const all = body.getElementsByTagName('*');
   for (let i = 0; i < all.length && i < 3000; i++) {
@@ -112,6 +158,13 @@ export default function install(ctx: Ctx) {
   shots++;
 
   const out: string[] = [];
+  /** Stylesheets uploaded once beside the HTML so every frame isn't a full CSS copy. */
+  const cssOut = new Map<string, string>();
+  const refCss = (css: string) => {
+    const id = hash(css);
+    cssOut.set(id, css);
+    return `<style data-assist-css="${id}"></style>`;
+  };
   let size = 0;
   const MAX = 1_500_000;
   type Frame = { el: Element; i: number; keep: boolean };
@@ -135,6 +188,16 @@ export default function install(ctx: Ctx) {
       const r = el.getBoundingClientRect();
       out.push(`<div data-assist-fp="${esc(fingerprint(el))}" style="width:${Math.round(r.width)}px;height:${Math.round(r.height)}px;background:#e5e7eb"></div>`);
       return false;
+    }
+    // Capture CSS by hash (not a localhost <link>): phones can't load the visitor's
+    // machine, and repeating the full sheet in every frame made live uploads heavy.
+    if (tag === 'LINK' && /stylesheet/i.test(el.getAttribute('rel') || '')) {
+      const link = el as HTMLLinkElement;
+      const css = sheets.get(link.href) || absCssUrls(sheetText(link), link.href || location.href);
+      if (css.trim()) {
+        out.push(refCss(css));
+        return false;
+      }
     }
     // SVG tag names are case-sensitive (clipPath, linearGradient). Lowercasing them
     // makes the browser drop the clip and the gradient, so a sheen paints as a black bar.
@@ -178,11 +241,14 @@ export default function install(ctx: Ctx) {
     out.push(s + '>');
     if (tag === 'HEAD') out.push(`<base href="${esc(location.origin)}/">`);
     if (tag === 'STYLE') {
-      let css = el.textContent || '';
-      if (!css.trim()) {
-        try {
-          css = [...((el as HTMLStyleElement).sheet?.cssRules || [])].map((r) => r.cssText).join('\n');
-        } catch {}
+      let css = (el as HTMLStyleElement).textContent || '';
+      if (!css.trim()) css = sheetText(el as HTMLStyleElement);
+      css = absCssUrls(css, location.href);
+      // Tiny inline rules stay in the document; larger sheets are shared by hash.
+      if (css.length > 240) {
+        out.pop();
+        out.push(refCss(css));
+        return false;
       }
       out.push(css.replace(/<\/style/gi, '<\\/style'));
       out.push('</style>');
@@ -235,7 +301,8 @@ export default function install(ctx: Ctx) {
     const ch = hash(html) + html.length.toString(36);
     if (!uploaded.has(ch)) {
       const meta = { h, ch, n: all.length, u: pageUrl(href), w: document.documentElement.scrollWidth, ht: document.documentElement.scrollHeight, vw: innerWidth };
-      const payload = await new Promise<string>((res) => ric(() => res(JSON.stringify({ v: 1, snap: { ...meta, html } })), { timeout: 3000 }));
+      const css = cssOut.size ? Object.fromEntries(cssOut) : undefined;
+      const payload = await new Promise<string>((res) => ric(() => res(JSON.stringify({ v: 1, snap: { ...meta, html, ...(css ? { css } : {}) } })), { timeout: 3000 }));
       try {
         let bodyData: BodyInit = payload;
         if ('CompressionStream' in window) bodyData = await new Response(new Blob([payload]).stream().pipeThrough(new (window as any).CompressionStream('gzip'))).blob();

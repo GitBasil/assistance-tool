@@ -48,6 +48,7 @@ const DAY = 86_400_000;
 export class Store {
   private snapDir: string;
   private frameDir: string;
+  private cssDir: string;
   private ins;
 
   constructor(
@@ -56,9 +57,41 @@ export class Store {
   ) {
     this.snapDir = join(dir, 'snaps');
     this.frameDir = join(dir, 'frames');
+    this.cssDir = join(dir, 'css');
     mkdirSync(this.snapDir, { recursive: true });
     mkdirSync(this.frameDir, { recursive: true });
+    mkdirSync(this.cssDir, { recursive: true });
     this.ins = db.prepare('INSERT INTO events (site, at, vid, body) VALUES (?, ?, ?, ?)');
+  }
+
+  /** Persist shared stylesheets once (content-addressed). Frames only keep the hash. */
+  saveCss(css: Record<string, string>) {
+    for (const [h, text] of Object.entries(css)) {
+      if (!/^[a-z0-9]{6,40}$/i.test(h) || typeof text !== 'string' || !text) continue;
+      const fp = join(this.cssDir, `${safe(h)}.css`);
+      if (!existsSync(fp)) writeFileSync(fp, text.slice(0, 512_000));
+    }
+  }
+
+  /** Expanded stylesheets by hash. Content-addressed, so an entry never goes stale. */
+  private cssMem = new Map<string, string>();
+  /** Fill `<style data-assist-css="hash">` placeholders for dashboard replay. */
+  expandCss(html: string) {
+    return html.replace(/<style\s+data-assist-css="([a-z0-9]+)"\s*>\s*<\/style>/gi, (_m, h: string) => {
+      const hit = this.cssMem.get(h);
+      if (hit !== undefined) return hit;
+      let out = '<style></style>';
+      try {
+        const fp = join(this.cssDir, `${safe(h)}.css`);
+        if (existsSync(fp)) out = `<style>${readFileSync(fp, 'utf8').replace(/<\/style/gi, '<\\/style')}</style>`;
+        else return out; // not stored yet; don't cache the miss
+      } catch {
+        return out;
+      }
+      if (this.cssMem.size > 500) this.cssMem.clear();
+      this.cssMem.set(h, out);
+      return out;
+    });
   }
 
   append(events: StoredEvent[]) {

@@ -34,6 +34,9 @@ export function createSession(cfg: Config, granted: boolean | null): Session {
   if (!s || t - s.at > IDLE) s = { id: rid(), at: t };
   s.at = t;
   if (storage) sset('sid', s, true);
+  // A dashboard watching live survives a full page load: without this every new page
+  // fell back to the 5 s batch timer, so a page change took ~5 s to show up live.
+  const watched = storage ? sget<number>('watched', 0, true) : 0;
   return {
     vid,
     sid: s.id,
@@ -42,6 +45,7 @@ export function createSession(cfg: Config, granted: boolean | null): Session {
     storage,
     bot: isBot(),
     start: Date.now(),
+    watched: watched > t ? watched : 0,
   };
 }
 

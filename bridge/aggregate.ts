@@ -157,9 +157,16 @@ const CTX: Record<string, [string, number]> = {
 };
 const CTX_WINDOW = 20_000;
 
-/** A session is live while its tab is open: the client heartbeats every 30s while visible. */
-export const LIVE_MS = 75_000;
-const isLive = (x: Sess, now = Date.now()) => x.left < x.end && now - x.end < LIVE_MS;
+/**
+ * A session is live while its tab is open. The client heartbeats every 30s; hidden
+ * tabs are often throttled to ~60s, so the grace window must be longer than that.
+ * `bye` (tab close / left the site) sets `left` and ends liveness, after a short grace:
+ * a page change inside the site also fires `bye`, with the next page view landing right
+ * behind it. Reporting "left" in that gap made live dashboards stop on the old page.
+ */
+export const LIVE_MS = 180_000;
+const BYE_GRACE = 8_000;
+const isLive = (x: Sess, now = Date.now()) => (x.left < x.end || now - x.left < BYE_GRACE) && now - x.end < LIVE_MS;
 interface TourAgg {
   id: string;
   start: number;

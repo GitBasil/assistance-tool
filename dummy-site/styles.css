@@ -127,12 +127,14 @@ label {
   font-size: 0.95rem;
   color: var(--muted);
 }
-input {
+input, select, textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.7rem 0.8rem;
   font: inherit;
+  /* 16px prevents iOS Safari from zooming the page when a field is focused. */
+  font-size: 16px;
   color: var(--ink);
   background: #fff;
 }

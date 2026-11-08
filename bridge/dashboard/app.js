@@ -509,27 +509,31 @@ const frameCache = new Map();
  * border the page computed, for controls that aren't actually using that bevel.
  */
 function flattenControls(doc) {
-  if (!doc) return;
+  if (!doc || !doc.defaultView || doc.documentElement?.dataset.assistFlat) return;
+  const view = doc.defaultView;
+  // Read every computed style first, then write: interleaving the two forces a style
+  // recalc per control, which on a long form is the whole frame budget on a phone.
+  const jobs = [];
   for (const el of doc.querySelectorAll('input, textarea, select, button, fieldset')) {
-    const cs = doc.defaultView.getComputedStyle(el);
+    const cs = view.getComputedStyle(el);
     if (/inset|outset|groove|ridge/.test(cs.borderStyle) || el.style.appearance === 'none') continue;
-    const border = cs.border;
-    const radius = cs.borderRadius;
-    const bg = cs.backgroundColor;
-    const pad = cs.padding;
+    jobs.push([el, cs.border, cs.borderRadius, cs.backgroundColor, cs.padding, el.tagName === 'SELECT' && (!cs.backgroundImage || cs.backgroundImage === 'none')]);
+  }
+  for (const [el, border, radius, bg, pad, arrow] of jobs) {
     el.style.setProperty('appearance', 'none');
     el.style.setProperty('-webkit-appearance', 'none');
     el.style.border = border;
     el.style.borderRadius = radius;
     el.style.backgroundColor = bg;
     el.style.padding = pad;
-    if (el.tagName === 'SELECT' && (!cs.backgroundImage || cs.backgroundImage === 'none')) {
+    if (arrow) {
       el.style.backgroundImage = 'linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%)';
       el.style.backgroundPosition = 'right 10px center, right 6px center';
       el.style.backgroundSize = '4px 4px, 4px 4px';
       el.style.backgroundRepeat = 'no-repeat';
     }
   }
+  if (doc.documentElement) doc.documentElement.dataset.assistFlat = '1';
 }
 
 const nodeKey = (n) => n.getAttribute('id') || n.getAttribute('data-assist-fp') || '';
@@ -595,6 +599,9 @@ function recordingPlayer(rec, marks, alive, onTime, opts = {}) {
   let shown = '';
   let clickAt = -1;
   let liveOn = !!opts.live;
+  let everLive = liveOn;
+  /** Playback ran off the end of a live tape (not paused by the viewer). */
+  let endedLive = false;
   let pages, total, moves, scrolls, clicks, inputs, boxScrolls, frames, baseOf, dots, idleSpans;
   const byPid = (list) => {
     const m = new Map();
@@ -676,21 +683,21 @@ function recordingPlayer(rec, marks, alive, onTime, opts = {}) {
   };
 
   const stage = el('div', { class: 'stage rec-stage' });
+  const scroller = el('div', { class: 'rec-scroll' });
   const wrap = el('div', { class: 'rec-wrap' });
   const inner = el('div', { class: 'inner' });
   const mkFrame = () => el('iframe', { sandbox: 'allow-same-origin', title: 'Session recording', referrerpolicy: 'no-referrer' });
   let frame = mkFrame();
-  let spare = mkFrame();
-  spare.classList.add('spare');
   const cursor = svgEl('svg', { class: 'rec-cursor', viewBox: '0 0 20 22', 'aria-hidden': 'true' });
   cursor.append(svgEl('path', { d: 'M1 1 L1 17 L5.2 13.2 L8.4 20 L11.2 18.7 L8 12 L13.4 12 Z', fill: '#111827', stroke: '#fff', 'stroke-width': '1.6', 'stroke-linejoin': 'round' }));
   cursor.style.display = 'none';
   const ripple = el('div', { class: 'rec-ripple' });
   const heatCanvas = el('canvas', { class: 'rec-heat', 'aria-hidden': 'true' });
   heatCanvas.style.display = 'none';
-  inner.append(frame, spare, heatCanvas, cursor, ripple);
+  inner.append(frame, heatCanvas, cursor, ripple);
   wrap.append(inner);
-  stage.append(wrap);
+  scroller.append(wrap);
+  stage.append(scroller);
   const playBtn = el('button', { type: 'button', class: 'primary', text: 'Play' });
   const speeds = [1, 2, 4, 8].map((n) => el('button', { type: 'button', text: n + '×', 'aria-pressed': n === 1, 'aria-label': 'Play at ' + n + ' times speed' }));
   const heatBtn = el('button', { type: 'button', text: 'Heatmap', 'aria-pressed': 'false', title: 'Overlay clicks or pointer movement as heat.' });
@@ -731,25 +738,50 @@ function recordingPlayer(rec, marks, alive, onTime, opts = {}) {
   );
   legend.hidden = !dots.length;
   const scrubRow = el('div', { class: 'scrub-row' }, el('div', { class: 'scrub-wrap' }, range, marksLayer), time, legend);
-  const box = el('div', { class: 'player' }, head, stage, toolbar, scrubRow, heatInfo);
+  const box = el('div', { class: 'player' }, head, stage, scrubRow, toolbar, heatInfo);
+  // Pool of page iframes. Every one of them lives inside `inner` for its whole life, and a
+  // page swap is only a class flip: moving an <iframe> to another parent destroys its
+  // browsing context and re-parses srcdoc from scratch, which is what made swaps slow.
+  // Hidden members use opacity (not visibility/display) so they keep parsing and laying out.
+  const prepared = new Map(); // key -> loaded iframe, waiting in the pool
+  const preparing = new Map(); // key -> promise of the above
+  const POOL_MAX = 8;
+  /** Landing snapshots of every page: kept warm whatever else gets evicted. */
+  const pinned = new Set();
 
   let isMax = false;
   const MAX_SCALE = 2.4;
   const fit = (seg) => {
     // The stage's size comes from the page layout, never from its content, so both
     // dimensions are safe to measure. Upscaling is capped so tiny captures stay legible.
-    const availW = stage.clientWidth || seg.w;
-    const availH = stage.clientHeight || seg.h;
-    const k = Math.min(MAX_SCALE, availW / seg.w, availH / seg.h);
-    inner.style.width = seg.w + 'px';
-    inner.style.height = seg.h + 'px';
-    inner.style.transform = `scale(${k})`;
-    wrap.style.width = Math.round(seg.w * k) + 'px';
-    wrap.style.height = Math.round(seg.h * k) + 'px';
-    for (const f of [frame, spare]) {
-      f.setAttribute('width', seg.w);
-      f.setAttribute('height', seg.h);
+    // On phones, fill the width (and pan vertically) so desktop sessions aren't postage stamps.
+    const port = scroller.clientWidth && scroller.clientHeight ? scroller : stage;
+    const availW = port.clientWidth || stage.clientWidth || seg.w;
+    const availH = port.clientHeight || stage.clientHeight || seg.h;
+    const phone = window.matchMedia('(max-width: 760px)').matches && !box.classList.contains('is-max') && !document.fullscreenElement;
+    const k = phone
+      ? Math.min(MAX_SCALE, Math.max(0.05, availW / Math.max(1, seg.w)))
+      : Math.min(MAX_SCALE, availW / Math.max(1, seg.w), availH / Math.max(1, seg.h));
+    // Runs every animation frame; only write when something changed so the loop stays
+    // paint-free while nothing moves.
+    const fk = seg.w + 'x' + seg.h + '@' + k;
+    if (fk !== fitKey) {
+      fitKey = fk;
+      inner.style.width = seg.w + 'px';
+      inner.style.height = seg.h + 'px';
+      inner.style.transform = `scale(${k})`;
+      wrap.style.width = Math.round(seg.w * k) + 'px';
+      wrap.style.height = Math.round(seg.h * k) + 'px';
     }
+    sizeFrame(frame, seg.w, seg.h);
+    if (phone) scroller.scrollLeft = 0;
+  };
+  let fitKey = '';
+  /** Pool frames are sized for their own page when prepared, so a swap needs no relayout. */
+  const sizeFrame = (f, w, h) => {
+    if (!f) return;
+    if (f.getAttribute('width') !== String(w)) f.setAttribute('width', w);
+    if (f.getAttribute('height') !== String(h)) f.setAttribute('height', h);
   };
   const scrollTo = (x, y) => {
     try {
@@ -923,15 +955,12 @@ function recordingPlayer(rec, marks, alive, onTime, opts = {}) {
     if (!list?.length) return null;
     return list[Math.max(0, before(list, ts) - 1)];
   }
-  let loadingKey = '';
-  const failedAt = new Map();
-  async function show(seg, ts) {
+  function snapKey(seg, ts) {
     const f = pickFrame(seg, ts);
-    const key = f ? 'h:' + f.h : 'u:' + seg.u;
-    if (shown === key || loadingKey === key) return;
-    // A live frame can be announced a moment before its upload lands; retry, but not every animation frame.
-    if (Date.now() - (failedAt.get(key) || 0) < 1000) return;
-    loadingKey = key;
+    return { f, key: f ? 'h:' + f.h : 'u:' + seg.u };
+  }
+  async function loadHtml(seg, ts) {
+    const { f, key } = snapKey(seg, ts);
     let html = f ? frameCache.get(f.h) : snapCache.get(seg.u);
     if (html == null) {
       try {
@@ -941,44 +970,227 @@ function recordingPlayer(rec, marks, alive, onTime, opts = {}) {
       }
       if (html != null) (f ? frameCache : snapCache).set(f ? f.h : seg.u, html);
     }
-    if (loadingKey !== key || !alive()) return;
-    loadingKey = '';
-    if (html == null) return void failedAt.set(key, Date.now());
+    return { f, key, html };
+  }
+  let loadingKey = '';
+  let shownPid = '';
+  const failedAt = new Map();
+
+  /** Drops an iframe from the pool and the DOM for good. */
+  function discard(iframe) {
+    if (!iframe) return;
+    for (const [k, f] of prepared) if (f === iframe) prepared.delete(k);
+    iframe.onload = null;
+    iframe.remove();
+  }
+  /**
+   * Keeps the pool bounded. The stalest in-page frame goes first; landing pages only
+   * when nothing else is left, and then the one whose page is farthest from the playhead.
+   */
+  function trimPool() {
+    while (prepared.size >= POOL_MAX) {
+      let victim = null;
+      let pick = null;
+      for (const [k, f] of prepared) {
+        const score = pinned.has(k) ? 1e15 - Math.abs(Number(f.dataset.g || 0) - g) : Number(f.dataset.at || 0);
+        if (!victim || score < pick) {
+          victim = f;
+          pick = score;
+        }
+      }
+      if (!victim) return;
+      discard(victim);
+    }
+  }
+  function activatePrepared(next, key, seg) {
+    if (next === frame) {
+      shown = key;
+      shownPid = seg.pid;
+      return;
+    }
+    const prev = frame;
+    const prevKey = shown;
+    // The swap: one class on each iframe. Both already sit in `inner`, parsed and laid out.
+    sizeFrame(next, seg.w, seg.h);
+    next.classList.remove('spare');
+    next.dataset.at = String(performance.now());
+    frame = next;
+    if (prev) {
+      prev.classList.add('spare');
+      prev.onload = null;
+      const dup = prevKey && prepared.get(prevKey);
+      if (!prevKey || prevKey === key || (dup && dup !== prev)) {
+        // Nothing worth keeping (or the pool already holds this page): free it.
+        if (dup && dup !== prev) discard(prev);
+        else prev.dataset.snap = '';
+      } else prepared.set(prevKey, prev);
+    }
+    prepared.delete(key);
     shown = key;
+    shownPid = seg.pid;
+    inputKey = '';
+    boxKey = '';
+    original = new Map();
+    heatFor = '';
+    heatPending = '';
+    heatKey = '';
+    // Normally done while the page waited in the pool; this only catches a frame shown early.
+    const doc = next.contentDocument;
+    if (!doc?.documentElement?.dataset.assistFlat) {
+      requestAnimationFrame(() => {
+        if (alive() && frame === next) flattenControls(next.contentDocument);
+      });
+    }
+  }
+  /**
+   * Parses `html` into a pool iframe (never the visible one) and resolves once it is
+   * loaded, sized for its page and had its controls flattened: ready to show as-is.
+   */
+  function prepareKey(key, html, seg) {
+    if (!key) return Promise.resolve(null);
+    if (frame.dataset.snap === key) return Promise.resolve(frame);
+    if (prepared.has(key)) return Promise.resolve(prepared.get(key));
+    if (preparing.has(key)) return preparing.get(key);
+    trimPool();
+    // Reuse an emptied pool iframe when there is one so we don't churn elements.
+    let iframe = [...inner.querySelectorAll('iframe.spare')].find((f) => f !== frame && !f.dataset.snap) || null;
+    if (!iframe) {
+      iframe = mkFrame();
+      iframe.classList.add('spare');
+      inner.insertBefore(iframe, heatCanvas);
+    }
+    iframe.dataset.snap = key;
+    iframe.dataset.at = String(performance.now());
+    if (seg) {
+      sizeFrame(iframe, seg.w, seg.h);
+      iframe.dataset.g = String(baseOf.get(seg.pid) || 0);
+    }
+    const p = new Promise((resolve) => {
+      const finish = () => {
+        preparing.delete(key);
+        if (!alive()) {
+          iframe.remove();
+          resolve(null);
+          return;
+        }
+        if (iframe.dataset.snap !== key) return void resolve(null); // repurposed meanwhile
+        // Flatten now, while hidden: getComputedStyle forces the layout the swap would
+        // otherwise pay for, and the page is painted right on its first visible frame.
+        try {
+          flattenControls(iframe.contentDocument);
+        } catch {}
+        prepared.set(key, iframe);
+        resolve(iframe);
+      };
+      if (!html) {
+        finish();
+        return;
+      }
+      iframe.onload = () => {
+        iframe.onload = null;
+        finish();
+      };
+      iframe.srcdoc = html;
+    });
+    preparing.set(key, p);
+    return p;
+  }
+  /**
+   * Fetch + parse every page the tape will visit, ahead of the playhead. Landing
+   * snapshots first (that's what a cross-page swap needs), other in-page frames after.
+   */
+  function prefetchSession() {
+    const land = [];
+    const rest = [];
+    const seen = new Set();
+    const segOfKey = new Map();
+    for (const seg of pages) {
+      const first = snapKey(seg, 0);
+      pinned.add(first.key);
+      if (!seen.has(first.key)) {
+        seen.add(first.key);
+        segOfKey.set(first.key, seg);
+        land.push({ key: first.key, f: first.f, u: first.f ? null : seg.u, seg });
+      }
+      for (const fr of frames.get(seg.pid) || []) {
+        const key = 'h:' + fr.h;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rest.push({ key, f: fr, u: null, seg });
+      }
+    }
+    // Later frames of a page (dialogs, rows) beyond what the pool can hold are left to
+    // morph on demand; they'd only evict the landing pages that matter most.
+    const jobs = land.concat(rest.slice(0, Math.max(0, POOL_MAX - land.length)));
+    let i = 0;
+    const run = async () => {
+      while (i < jobs.length && alive()) {
+        const job = jobs[i++];
+        if (prepared.has(job.key) || preparing.has(job.key) || frame.dataset.snap === job.key) continue;
+        try {
+          let html;
+          if (job.f) {
+            html = frameCache.has(job.f.h) ? frameCache.get(job.f.h) : (await api('snapshot', { h: job.f.h })).html || '';
+            frameCache.set(job.f.h, html);
+          } else {
+            html = snapCache.has(job.u) ? snapCache.get(job.u) : (await api('snapshot', { u: job.u })).html || '';
+            snapCache.set(job.u, html);
+          }
+          if (!html) continue;
+          await prepareKey(job.key, html, job.seg);
+        } catch {}
+      }
+    };
+    // Two lanes: enough to overlap downloads, not so many that parsing fights playback.
+    run();
+    run();
+  }
+  async function show(seg, ts) {
+    const { f, key } = snapKey(seg, ts);
+    if (shown === key || loadingKey === key) return;
+    if (Date.now() - (failedAt.get(key) || 0) < 1000) return;
+    loadingKey = key;
+    const t0 = performance.now();
+    const { html } = await loadHtml(seg, ts);
+    if (loadingKey !== key || !alive()) return;
+    if (html == null) {
+      loadingKey = '';
+      return void failedAt.set(key, Date.now());
+    }
     if (!html) {
+      loadingKey = '';
+      shown = key;
+      shownPid = seg.pid;
       cap.textContent = 'No snapshot for this page yet. The pointer still plays on an empty screen.';
       cap.hidden = false;
       return;
     }
     cap.hidden = true;
+    // In-page frame updates stay as morph (dialogs/rows). Cross-page uses a pre-parsed iframe.
     const doc = frame.contentDocument;
-    if (doc?.body && frame.srcdoc) {
+    if (shownPid === seg.pid && f && shown.startsWith('h:') && doc?.body && frame.srcdoc) {
+      loadingKey = '';
+      shown = key;
+      frame.dataset.snap = key;
       morph(doc.documentElement, new DOMParser().parseFromString(html, 'text/html').documentElement, doc);
-      flattenControls(doc);
+      requestAnimationFrame(() => {
+        if (alive() && shown === key) flattenControls(doc);
+      });
       inputKey = '';
       boxKey = '';
       original = new Map();
       draw();
       return;
     }
-    const next = spare;
-    next.onload = () => {
-      next.onload = null;
-      if (!alive() || shown !== key) return;
-      next.classList.remove('spare');
-      frame.classList.add('spare');
-      spare = frame;
-      frame = next;
-      flattenControls(next.contentDocument);
-      inputKey = '';
-      boxKey = '';
-      original = new Map();
-      heatFor = '';
-      heatPending = '';
-      heatKey = '';
-      draw();
-    };
-    next.srcdoc = html;
+    const next = await prepareKey(key, html, seg);
+    if (!alive() || loadingKey !== key) return;
+    loadingKey = '';
+    if (!next || shown === key) return;
+    activatePrepared(next, key, seg);
+    // How long the last cross-page swap took, from the playhead crossing to the new page
+    // being the visible frame. Pool hit: ~0 ms. Readable in a console for verification.
+    window.__assistSwapMs = Math.round(performance.now() - t0);
+    draw();
   }
 
   // Panels and dialogs scrolled on their own: the latest position before `ts`, or the top.
@@ -1097,6 +1309,9 @@ function recordingPlayer(rec, marks, alive, onTime, opts = {}) {
         if (!liveOn) {
           playing = false;
           playBtn.textContent = 'Play';
+          // Stopped by the tape running out, not by the viewer: resume if the visitor turns
+          // out to be mid-navigation (their `bye` lands a moment before the next page view).
+          endedLive = everLive;
         }
       }
       draw();
@@ -1118,6 +1333,7 @@ function recordingPlayer(rec, marks, alive, onTime, opts = {}) {
   liveBtn.addEventListener('click', goLive);
   playBtn.addEventListener('click', () => {
     if (g >= total && !liveOn) g = 0;
+    endedLive = false;
     playing = !playing;
     playBtn.textContent = playing ? 'Pause' : 'Play';
     last = 0;
@@ -1209,27 +1425,49 @@ function recordingPlayer(rec, marks, alive, onTime, opts = {}) {
       box.seek(opts.at.pid, Number(opts.at.ts) || 0);
     } else if (liveOn) goLive();
     else draw();
+    prefetchSession();
   });
   return Object.assign(box, {
     isPlaying: () => playing,
     /** New samples for a live session: the tape grows in place; the page frame is kept. */
     update(r, mk, live) {
       if (!r?.pages?.length) return;
-      const following = liveOn && playing && total - g < 2500;
+      // A page change arrives as `bye` then the next page view, so for one poll the session
+      // reads as not live. Keep following through that blip (and resume if the tape had run
+      // out meanwhile) instead of stopping on the old page's last frame.
+      if (live) {
+        if (endedLive && !playing) {
+          playing = true;
+          playBtn.textContent = 'Pause';
+          last = 0;
+        }
+        endedLive = false;
+        everLive = true;
+      }
+      const following = (liveOn || live) && playing && total - g < 2500;
       const head = pages?.[0]?.pid;
+      const tail = pages?.[pages.length - 1]?.pid;
       ingest(r, mk);
       liveOn = !!live;
       // Dropping the oldest page shifts the whole tape, so a playhead that was following
-      // the visitor would land on an earlier page. Put it back at the live edge.
-      if (following && (pages[0]?.pid !== head || total - g > 1500)) g = Math.max(0, total - LIVE_LAG);
+      // the visitor would land on an earlier page. Put it back at the live edge. Same when
+      // the visitor opened a new page: replaying the old page's last second first (its
+      // final samples plus the 400 ms tail every page carries) is what made a live page
+      // change show up late. And never trail the edge by more than a couple of batches.
+      if (following && (pages[0]?.pid !== head || pages[pages.length - 1]?.pid !== tail || total - g > 1000)) g = Math.max(0, total - LIVE_LAG);
       inputKey = '';
       renderMarks();
+      prefetchSession();
       if (!playing) draw();
     },
     /** A fresher snapshot arrived for `u`. */
     refreshSnap(u) {
       snapCache.delete(u);
-      if (shown === 'u:' + u) {
+      const key = 'u:' + u;
+      // The pool may hold the stale document too; otherwise the refresh would never show.
+      if (prepared.has(key)) discard(prepared.get(key));
+      if (frame.dataset.snap === key) frame.dataset.snap = '';
+      if (shown === key) {
         shown = '';
         draw();
       }
@@ -2015,6 +2253,22 @@ const views = {
         default: return e.t;
       }
     };
+    // Older captures fired `bye` on every in-site page change. Hide those when a
+    // pageview follows within a few seconds so the timeline matches what happened.
+    const softBye = (tl) => {
+      const out = [];
+      for (let i = 0; i < tl.length; i++) {
+        const e = tl[i];
+        if (e.t === 'bye') {
+          let j = i + 1;
+          while (j < tl.length && (tl[j].t === 'hb' || tl[j].t === 'vit')) j++;
+          const next = tl[j];
+          if (next?.t === 'pv' && (next.at || 0) - (e.at || 0) < 8000) continue;
+        }
+        out.push(e);
+      }
+      return out;
+    };
     const marksOf = (tl) =>
       (tl || []).flatMap((e) => {
         if (e.t === 'c') return [{ pid: e.pid, ts: e.ts || 0, kind: 'click', label: label(e) }];
@@ -2041,9 +2295,16 @@ const views = {
     const list = el('ul', { class: 'timeline' });
     let shownTl = 0;
     const addItems = (tl) => {
+      const view = softBye(tl || []);
+      // Soft-bye filtering can shrink the list when a pageview follows a false leave.
+      if (view.length < shownTl) {
+        list.replaceChildren();
+        items.length = 0;
+        shownTl = 0;
+      }
       const fresh = shownTl > 0;
       const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
-      for (const e of tl.slice(shownTl)) {
+      for (const e of view.slice(shownTl)) {
         const li = el('li', { class: 'click t-' + e.t + (fresh ? ' fresh' : ''), 'data-pid': e.pid || '', 'data-ts': e.ts || 0, tabindex: '0' }, el('span', { class: 'muted', text: ms(e.at - s.start) }), el('span', { class: 'badge', text: e.t }), el('span', { text: label(e) }));
         const seek = () => player.seek?.(e.pid, e.ts || 0);
         li.addEventListener('click', seek);
@@ -2053,8 +2314,8 @@ const views = {
         items.push(li);
         list.append(li);
       }
-      if (fresh && atBottom && tl.length > shownTl) list.scrollTop = list.scrollHeight;
-      shownTl = tl.length;
+      if (fresh && atBottom && view.length > shownTl) list.scrollTop = list.scrollHeight;
+      shownTl = view.length;
     };
     addItems(s.timeline || []);
     const tlNote = el('span', { class: 'muted' });
@@ -2159,18 +2420,19 @@ const views = {
       const [s2, r2] = await Promise.all([api('session/' + encodeURIComponent(p.sid)), api('replay/' + encodeURIComponent(p.sid)).catch(() => null)]);
       if (!alive()) return;
       paintMeta(s2);
+      // The player first: live viewers wait on this, not on the visit history below.
+      addItems(s2.timeline || []);
+      if (player.update) player.update(r2, marksOf(s2.timeline), s2.live);
+      else if (r2?.pages?.length) {
+        player = recordingPlayer(r2, marksOf(s2.timeline), alive, onTime, { live: s2.live });
+        playerCol.replaceChildren(player);
+      }
       // Only a live session can still change its place in the history (or the visitor return).
       if (s2.live || wasLive) {
         const v2 = await visitsOf(s2.vid);
         if (!alive()) return;
         visits = v2;
         paintVisits();
-      }
-      addItems(s2.timeline || []);
-      if (player.update) player.update(r2, marksOf(s2.timeline), s2.live);
-      else if (r2?.pages?.length) {
-        player = recordingPlayer(r2, marksOf(s2.timeline), alive, onTime, { live: s2.live });
-        playerCol.replaceChildren(player);
       }
       wasLive = s2.live;
     };
@@ -3103,6 +3365,8 @@ function rangeControl(view, params) {
 const live = { es: null, onEvent: null };
 // Performance is left out: it has a search box, and vitals change too slowly to need it.
 const SOFT = new Set(['overview', 'people', 'frustration', 'errors', 'forms', 'funnels', 'sessions', 'sites']);
+/** Pointer/scroll samples: keep the SSE wire light by not rebuilding report pages for these alone. */
+const LIVE_NOISE = new Set(['mv', 'rp', 'hv', 'sd']);
 
 let liveFor = null;
 function connectLive(site) {
@@ -3155,6 +3419,14 @@ async function render() {
   renderSwitcher();
   const active = view === 'session' ? 'sessions' : view;
   for (const a of $('#nav').querySelectorAll('a')) a.dataset.v === active ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
+  if (document.body.classList.contains('nav-open')) {
+    document.body.classList.remove('nav-open');
+    const mb = document.querySelector('.menu-toggle');
+    if (mb) {
+      mb.setAttribute('aria-expanded', 'false');
+      mb.textContent = '☰';
+    }
+  }
   const fn = () => views[view](params);
   const withTools = (nodes) => {
     if (!RANGED.has(view) || params.sid) return nodes;
@@ -3176,6 +3448,9 @@ async function render() {
       live.onEvent = (d) => {
         // Ticks only matter to the sessions list (a session can go quiet without new events).
         if (d.k === 'snap' || (d.k === 'tick' && view !== 'sessions')) return;
+        // Pointer/scroll noise: SSE stays light, but rebuilding the whole report for every
+        // move batch made the dashboard feel stuck until a manual refresh.
+        if (d.k === 'ev' && Array.isArray(d.t) && d.t.length && d.t.every((x) => LIVE_NOISE.has(x))) return;
         // Throttle, not debounce: a steady stream of events must still refresh the view.
         if (t) return;
         t = setTimeout(async () => {
@@ -3313,12 +3588,24 @@ function showLogin(message = '') {
 
 async function enterApp() {
   document.body.classList.remove('boot-pending', 'login-screen');
+  const menuBtn = el('button', {
+    type: 'button',
+    class: 'menu-toggle',
+    'aria-label': 'Menu',
+    'aria-expanded': 'false',
+    text: '☰',
+    onclick: () => {
+      const on = document.body.classList.toggle('nav-open');
+      menuBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+      menuBtn.textContent = on ? '✕' : '☰';
+    },
+  });
   document.body.replaceChildren(
     el('a', { class: 'skip', href: '#main', text: 'Skip to content' }),
     el(
       'aside',
       { class: 'side' },
-      el('div', { class: 'brand' }, el('img', { src: '/dashboard/favicon.svg', alt: '', width: '22', height: '22' }), 'Footsteps ', el('span', { text: 'insights' })),
+      el('div', { class: 'side-top' }, el('div', { class: 'brand' }, el('img', { src: '/dashboard/favicon.svg', alt: '', width: '22', height: '22' }), 'Footsteps ', el('span', { text: 'insights' })), menuBtn),
       el('div', { id: 'switcher', class: 'switcher' }),
       el('nav', { id: 'nav', 'aria-label': 'Views' }),
       el(

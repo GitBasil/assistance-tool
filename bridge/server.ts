@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync, brotliCompressSync, constants as Z } from 'node:zlib';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { loadConfig, ROOT, type BridgeConfig } from './config';
@@ -29,12 +29,36 @@ const stats = { accepted: 0, rejected: 0, events: 0, snapshots: 0, started: Date
 const secureCookies = () => cfg.publicUrl.startsWith('https:');
 
 // ---------------- helpers ----------------
+// Only bodies worth squeezing: text-like types above 1 KB. Images and tiny replies go as-is.
+const COMPRESS_MIN = 1024;
+const compressible = (type: string) => /^(application\/(json|javascript)|text\/|image\/svg)/i.test(type);
+/** Picks `br` or `gzip` from the request's Accept-Encoding, or '' when neither is wanted. */
+function pickEncoding(res: ServerResponse) {
+  const accept = String(res.req?.headers['accept-encoding'] || '').toLowerCase();
+  if (!accept) return '';
+  if (/(^|,)\s*br\s*(;|,|$)/.test(accept)) return 'br';
+  if (/(^|,)\s*(gzip|x-gzip)\s*(;|,|$)/.test(accept)) return 'gzip';
+  return '';
+}
 function send(res: ServerResponse, status: number, body?: unknown, headers: Record<string, string> = {}) {
   for (const [k, v] of Object.entries({ ...SECURITY_HEADERS, ...headers })) res.setHeader(k, v);
   if (cfg?.publicUrl.startsWith('https:')) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   if (body === undefined) return void res.writeHead(status).end();
-  const s = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
+  let s: string | Buffer = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
   if (!res.hasHeader('content-type')) res.setHeader('content-type', typeof body === 'object' && !Buffer.isBuffer(body) ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8');
+  // Snapshot documents run to hundreds of KB of inlined CSS; on a phone the download is
+  // most of a page swap. Compress text responses whenever the client accepts it.
+  const type = String(res.getHeader('content-type') || '');
+  if (Buffer.byteLength(s) >= COMPRESS_MIN && compressible(type) && !res.hasHeader('content-encoding')) {
+    const enc = pickEncoding(res);
+    if (enc) {
+      const buf = Buffer.isBuffer(s) ? s : Buffer.from(s, 'utf8');
+      // Brotli at a moderate level: still ~15% smaller than gzip, without the q11 CPU bill.
+      s = enc === 'br' ? brotliCompressSync(buf, { params: { [Z.BROTLI_PARAM_QUALITY]: 5, [Z.BROTLI_PARAM_SIZE_HINT]: buf.length } }) : gzipSync(buf, { level: 6 });
+      res.setHeader('content-encoding', enc);
+    }
+    res.setHeader('vary', 'Accept-Encoding');
+  }
   res.writeHead(status).end(s);
 }
 
@@ -123,8 +147,14 @@ const liveOf = (site: string) => (site === '*' ? sites.list().reduce((n, s) => n
 function stream(req: IncomingMessage, res: ServerResponse, site: string) {
   if (streams.size >= MAX_STREAMS) return send(res, 503, { error: 'too many live viewers' });
   for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
-  res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+  res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+  res.setHeader('cache-control', 'no-cache, no-transform');
+  res.setHeader('connection', 'keep-alive');
+  res.setHeader('x-accel-buffering', 'no');
+  res.writeHead(200);
+  // Flush the hello immediately so intermediaries don't wait for a larger chunk.
   res.write(`retry: 3000\ndata: ${JSON.stringify({ k: 'hello', live: liveOf(site), at: Date.now() })}\n\n`);
+  if (typeof (res as any).flush === 'function') (res as any).flush();
   const c = { res, site };
   streams.add(c);
   req.on('close', () => streams.delete(c));
@@ -168,6 +198,8 @@ async function collect(req: IncomingMessage, res: ServerResponse, q: URLSearchPa
   if (ok(body.snap)) {
     const s = body.snap as any;
     if (typeof s.html !== 'string' || typeof s.u !== 'string') return send(res, 400, { error: 'bad snapshot' });
+    // Shared stylesheets arrive once as `css: { hash: text }` so frames stay small.
+    if (ok(s.css)) store.saveCss(s.css as Record<string, string>);
     store.saveSnapshot({ site: site.id, u: S(s.u, 400), h: S(s.h, 40), ch: S(s.ch, 40) || undefined, n: +s.n || 0, w: +s.w || 0, ht: +s.ht || 0, vw: +s.vw || 0, html: s.html.slice(0, MAX_UNZIPPED), at: Date.now() });
     stats.snapshots++;
     publish(site.id, { k: 'snap', site: site.id, u: S(s.u, 400), at: Date.now() });
@@ -429,8 +461,11 @@ async function api(req: IncomingMessage, res: ServerResponse, path: string, q: U
       const ch = q.get('h');
       const s = ch ? store.frame(sid, ch) : store.snapshot(sid, q.get('u') || '');
       // Frames are immutable (content-addressed), so the dashboard may cache them.
-      if (s && ch) return send(res, 200, s, { 'cache-control': 'private, max-age=86400, immutable' });
-      return s ? send(res, 200, s) : send(res, 404, { error: 'no snapshot yet' });
+      // Expand shared CSS hashes so phones/desktops get a self-contained document.
+      if (!s) return send(res, 404, { error: 'no snapshot yet' });
+      const body = { ...s, html: store.expandCss(s.html) };
+      if (ch) return send(res, 200, body, { 'cache-control': 'private, max-age=86400, immutable' });
+      return send(res, 200, body);
     }
   }
   send(res, 404, { error: 'unknown api' });
@@ -459,7 +494,14 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     return file(res, DIST, path.slice(1), {
       'access-control-allow-origin': '*',
       'cross-origin-resource-policy': 'cross-origin',
-      'cache-control': hashed ? 'public, max-age=31536000, immutable' : 'public, max-age=300',
+      // assist.js is the only un-hashed entry — keep CDN TTL short so leave-detection fixes ship.
+      'cache-control': hashed ? 'public, max-age=31536000, immutable' : 'public, max-age=60, must-revalidate',
+      ...(hashed
+        ? {}
+        : {
+            'cdn-cache-control': 'public, max-age=60, must-revalidate',
+            'cloudflare-cdn-cache-control': 'public, max-age=60, must-revalidate',
+          }),
     });
   }
   if (path === '/health') return send(res, 200, { ok: true, version: VERSION, uptime: Math.round((Date.now() - stats.started) / 1000) });
@@ -502,7 +544,9 @@ async function route(req: IncomingMessage, res: ServerResponse) {
     }
     // Dashboard API requires a signed-in user (except login).
     if (!isLogin && !user) return send(res, 401, { error: 'Sign in required.' });
-    if (user) auth.maybeRefreshCookie(req, res, secureCookies());
+    // Never Set-Cookie on the SSE stream: proxies/browsers may buffer the whole
+    // response when a cookie is rewritten, which stalls live updates until refresh.
+    if (user && path !== '/api/stream') auth.maybeRefreshCookie(req, res, secureCookies());
     return api(req, res, path, q, false, user);
   }
   const dashHeaders = {
